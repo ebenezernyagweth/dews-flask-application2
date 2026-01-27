@@ -382,36 +382,56 @@ class SecondaryVariableGenerator:
 #============================================================
 #--------------- ERA5 TEMPERATURE (10KM) --------------------#
 #============================================================
-    def get_era5_temperature_by_month(self, year, month, polygons_ee):
-        era5 = ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR') \
-            .filter(ee.Filter.calendarRange(year, year, 'year')) \
-            .filter(ee.Filter.calendarRange(month, month, 'month'))
+   def get_era5_temperature_by_month(self, year, month, polygons_ee):
+        era5 = (ee.ImageCollection('ECMWF/ERA5_LAND/DAILY_AGGR')
+                .filter(ee.Filter.calendarRange(year, year, 'year'))
+                .filter(ee.Filter.calendarRange(month, month, 'month')))
 
         max_temp = era5.select('temperature_2m_max').map(lambda img: img.subtract(273.15).rename('max_temp'))
         min_temp = era5.select('temperature_2m_min').map(lambda img: img.subtract(273.15).rename('min_temp'))
         avg_temp = era5.select('temperature_2m').map(lambda img: img.subtract(273.15).rename('avg_temp'))
 
         avg_temp_month = avg_temp.mean().rename('avg_temp_month')
-        hot_days = max_temp.map(lambda img: img.gt(30)).reduce(ee.Reducer.sum()).rename('hot_days')
+        hot_days  = max_temp.map(lambda img: img.gt(30)).reduce(ee.Reducer.sum()).rename('hot_days')
         cold_days = min_temp.map(lambda img: img.lt(10)).reduce(ee.Reducer.sum()).rename('cold_days')
 
-        consecutive_hot = max_temp.map(lambda img: img.gt(30))
-        max_consec_hot = ee.Image(consecutive_hot.iterate(
-            self.consecutive_days, ee.Image(0))).reduce(ee.Reducer.max()).rename('consec_hot_days')
+        # ---- Correct pixel-wise max consecutive days (then polygon mean) ----
+        def max_consecutive(binary_ic):
+            binary_ic = binary_ic.map(lambda img: img.unmask(0).rename('b'))
+            init = ee.Image.constant([0, 0]).rename(['cur', 'best'])
 
-        consecutive_cold = min_temp.map(lambda img: img.lt(10))
-        max_consec_cold = ee.Image(consecutive_cold.iterate(
-            self.consecutive_days, ee.Image(0))).reduce(ee.Reducer.max()).rename('consec_cold_days')
+            def step(img, state):
+                img = ee.Image(img).select('b')
+                state = ee.Image(state)
+                cur = state.select('cur')
+                best = state.select('best')
 
-        combined = avg_temp_month.addBands(hot_days).addBands(cold_days).addBands(max_consec_hot).addBands(max_consec_cold)
+                new_cur = img.multiply(cur.add(1))     # if b=1 -> cur+1 else 0
+                new_best = best.max(new_cur)           # max over time
+                return ee.Image.cat([new_cur.rename('cur'), new_best.rename('best')])
 
-        stats = combined.reduceRegions(
-            collection=polygons_ee,
-            reducer=ee.Reducer.mean(),
-            scale=11132
-        ).map(lambda f: f.set('year', year).set('month', month))
+            final_state = ee.Image(binary_ic.iterate(step, init))
+            return final_state.select('best')
+
+        max_consec_hot  = max_consecutive(max_temp.map(lambda img: img.gt(30))).rename('consec_hot_days')
+        max_consec_cold = max_consecutive(min_temp.map(lambda img: img.lt(10))).rename('consec_cold_days')
+        # ---------------------------------------------------------------
+
+        combined = (avg_temp_month
+                    .addBands(hot_days)
+                    .addBands(cold_days)
+                    .addBands(max_consec_hot)
+                    .addBands(max_consec_cold))
+
+        stats = (combined.reduceRegions(
+                    collection=polygons_ee,
+                    reducer=ee.Reducer.mean(),
+                    scale=11132
+                )
+                .map(lambda f: f.set('year', year).set('month', month)))
 
         return stats
+
        
     def export_era5_in_chunks(self, year, month, polygons_gdf, polygon_id_col="Ward",
                             chunk_size=10, scale=11132, bucket_name=None):

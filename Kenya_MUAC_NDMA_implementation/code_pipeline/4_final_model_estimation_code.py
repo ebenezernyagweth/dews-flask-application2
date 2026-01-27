@@ -510,7 +510,7 @@ for outcome_var in outcomes:
                 model=m,
                 outcome_var=outcome_var,
                 horizons=(1, 2, 3),
-                delete_inputs=False,
+                delete_inputs=True,
                 observed_df = data,   
                 observed_file=  None,          
                 ward_col= "Ward",

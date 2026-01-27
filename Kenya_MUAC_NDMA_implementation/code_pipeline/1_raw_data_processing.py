@@ -526,11 +526,34 @@ final_df.rename(columns={'avg_wasting_prevalence': 'wasting'}, inplace=True)
 
 final_df.head()
 
-min_date = muac['InterviewDate'].min()
-max_date = muac['InterviewDate'].max()
+# -------------------------------------------------------------------
+# Derive start and end labels from Month and Year columns
+# -------------------------------------------------------------------
+import calendar
 
-start_label = min_date.strftime('%b_%Y')
-end_label = max_date.strftime('%b_%Y')
+# Drop rows missing either month or year
+valid_dates = final_df.dropna(subset=["month_num", "Year"])
+
+if valid_dates.empty:
+    raise ValueError("No valid Month/Year info available to create filename labels.")
+
+# Build period values as datetime (first day of that month)
+valid_dates["period"] = pd.to_datetime(
+    valid_dates["Year"].astype(int).astype(str) + "-" + valid_dates["month_num"].astype(int).astype(str) + "-01",
+    errors="coerce"
+)
+
+# Compute min and max period
+min_date = valid_dates["period"].min()
+max_date = valid_dates["period"].max()
+
+# Format labels as, e.g., 'Sep_2025'
+start_label = f"{calendar.month_abbr[min_date.month]}_{min_date.year}"
+end_label   = f"{calendar.month_abbr[max_date.month]}_{max_date.year}"
+
+# -------------------------------------------------------------------
+# Construct output filename and save
+# -------------------------------------------------------------------
 
 if start_label == end_label:
     # filename = f"Kenya_NDMA_MUAC_23_counties_{start_label}_WARD_LEVEL.pkl"

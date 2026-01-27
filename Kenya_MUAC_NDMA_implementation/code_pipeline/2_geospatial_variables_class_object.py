@@ -204,15 +204,33 @@ class SecondaryVariableGenerator:
             wet_days = chirps.map(lambda img: img.gte(1)).reduce(ee.Reducer.sum()).rename(['wet_days'])
             dry_days = chirps.map(lambda img: img.lt(1)).reduce(ee.Reducer.sum()).rename(['dry_days'])
 
-            def consecutive_days(img, prev):
-                prev = ee.Image(prev)
-                return img.multiply(prev.add(1)).rename('consec')
+            def max_consecutive(binary_ic):
+                # Make sure the collection is binary 0/1 with a stable band name
+                binary_ic = binary_ic.map(lambda img: img.unmask(0).rename('b'))
+
+                # State image has two bands:
+                #   cur  = current streak length ending today
+                #   best = best (max) streak length seen so far
+                init = ee.Image.constant([0, 0]).rename(['cur', 'best'])
+
+                def step(img, state):
+                    img = ee.Image(img).select('b')
+                    state = ee.Image(state)
+                    cur = state.select('cur')
+                    best = state.select('best')
+
+                    new_cur = img.multiply(cur.add(1))              # if b=1 -> cur+1 else 0
+                    new_best = best.max(new_cur)                    # keep maximum so far
+                    return ee.Image.cat([new_cur.rename('cur'), new_best.rename('best')])
+
+                final_state = ee.Image(binary_ic.iterate(step, init))
+                return final_state.select('best')
 
             wet_binary = chirps.map(lambda img: img.gte(1))
-            max_consec_wet = ee.Image(wet_binary.iterate(consecutive_days, ee.Image(0))).reduce(ee.Reducer.max()).rename('consec_wet_days')
-
             dry_binary = chirps.map(lambda img: img.lt(1))
-            max_consec_dry = ee.Image(dry_binary.iterate(consecutive_days, ee.Image(0))).reduce(ee.Reducer.max()).rename('consec_dry_days')
+
+            max_consec_wet = max_consecutive(wet_binary).rename('consec_wet_days')
+            max_consec_dry = max_consecutive(dry_binary).rename('consec_dry_days')
 
             combined = total_precip.addBands(wet_days).addBands(dry_days).addBands(max_consec_wet).addBands(max_consec_dry)
 
@@ -223,7 +241,6 @@ class SecondaryVariableGenerator:
             ).map(lambda f: f.set('year', year).set('month', month))
 
             return stats
-
 
     def export_chirps_in_chunks(self,
             year, month,

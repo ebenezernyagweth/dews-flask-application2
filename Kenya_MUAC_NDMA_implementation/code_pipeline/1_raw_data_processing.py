@@ -91,10 +91,7 @@ muac = pd.read_excel(os.path.join(RAW
                         header=header_row_index)
 
 # Adding numeric month variable
-muac['InterviewDate'] = pd.to_datetime(muac['InterviewDate'], errors='coerce')
-muac['month_num'] = muac['InterviewDate'].dt.month
-print(muac[['InterviewDate', 'month_num']].head())
-
+muac['month_num'] = pd.to_datetime(muac['Month'], format='%B').dt.month
 
 final_cols = ['QID', 'County', 'SubCounty', 'Ward', 'LivelihoodZone', 'Month', 'month_num', 'Year',
         'HouseholdCode', 'ChildName', 'Gender', 'MUAC', 'MUAC_Color',

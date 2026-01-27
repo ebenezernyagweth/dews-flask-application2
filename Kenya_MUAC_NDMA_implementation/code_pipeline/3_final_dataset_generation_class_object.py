@@ -128,7 +128,7 @@ class WastingPrevalenceDatasetBuilder:
             print(f"Year: {row['year']}, Month: {row['month']}, Observations: {row['num_obs']}")
 
 
-    def eliminate_prevalences_with_insufficient_obs(self, min_num_obs_ward=35, plot=True):
+    def eliminate_prevalences_with_insufficient_obs(self, min_num_obs_ward=35, plot=False):
         """
         Filters out wards with fewer than the minimum number of observations per month.
         Optionally plots the eliminated vs. remaining wards.
@@ -175,7 +175,7 @@ class WastingPrevalenceDatasetBuilder:
 
     
     def clean_for_data_continuity(self, total_months_min=6, max_gap_size=3, 
-                                    folder_images="plots", save_plots=True, plot=True):
+                                    folder_images="plots", save_plots=True, plot=False):
             """
             Cleans MUAC data for continuity. Filters out wards with too few total months,
             large data gaps, or discontinuous data. Optionally generates plots of
@@ -439,7 +439,7 @@ class WastingPrevalenceDatasetBuilder:
 
 
 
-    def merge_travel_time(self, generate_plot=True, save_plot=True, plot=True, 
+    def merge_travel_time(self, generate_plot=True, save_plot=True, plot=False, 
                           output_dir="covariates_graphs", accessiblity_file_name="accessibility_to_cities_2015.csv"):
         """
         Merges travel time data and optionally generates a heatmap.
@@ -482,7 +482,7 @@ class WastingPrevalenceDatasetBuilder:
            plt.close()
 
 
-    def merge_population_density(self, generate_plot=True, save_plot=True, plot=True, 
+    def merge_population_density(self, generate_plot=True, save_plot=True, plot=False, 
                                  output_dir="covariates_graphs",
                                  population_file_name="population_density_2015_2020.csv",
                                  map_year=2020):
@@ -536,7 +536,7 @@ class WastingPrevalenceDatasetBuilder:
                                 new_file,
                                 baseline_years,
                                 analysis_years,
-                                generate_plot=True, save_plot=True, plot=True,
+                                generate_plot=True, save_plot=True, plot=False,
                                 output_dir="covariates_graphs"):
         """
         Merges ERA5 temperature data, computes Z-scores, and optionally generates a plot.
@@ -1186,7 +1186,7 @@ class WastingPrevalenceDatasetBuilder:
                                     new_file=None,
                                     baseline_years=(2016, 2020),
                                     analysis_years=(2021, 2025),
-                                    generate_plot=True, save_plot=True, plot=True,
+                                    generate_plot=True, save_plot=True, plot=False,
                                     output_dir="covariates_graphs"):
         """
         Merges NDVI/EVI data by land use class, computes Z-scores from a fixed baseline, 

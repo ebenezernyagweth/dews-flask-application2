@@ -173,222 +173,270 @@ class WastingPrevalenceDatasetBuilder:
 #            plt.show()
 #            plt.close()
 
-        
-        
+    
     def clean_for_data_continuity(self, total_months_min=6, max_gap_size=3, 
-                                folder_images="plots", save_plots=True, plot=True):
-        """
-        Cleans MUAC data for continuity. Filters out wards with too few total months,
-        large data gaps, or discontinuous data. Optionally generates plots of
-        inconsistently sampled wards and summary figures.
-        """
-
-        print("Starting data continuity cleaning...")
-
-        # Ensure year and month are integers
-        self.muac_data_filtered['year'] = self.muac_data_filtered['year'].astype(int)
-        self.muac_data_filtered['month'] = self.muac_data_filtered['month'].astype(int)
-
-        # Ensure date column exists with strict error handling
-        self.muac_data_filtered['date'] = pd.to_datetime(
-            self.muac_data_filtered[['year', 'month']].assign(day=1),
-            errors='raise'
-        )
-
-        # Summary of each ward's date coverage
-        ward_summary = (
-            self.muac_data_filtered.groupby('Ward')
-            .agg(
-                first_observation=('date', 'min'),
-                last_observation=('date', 'max'),
-                total_months=('date', 'nunique')
+                                    folder_images="plots", save_plots=True, plot=True):
+            """
+            Cleans MUAC data for continuity. Filters out wards with too few total months,
+            large data gaps, or discontinuous data. Optionally generates plots of
+            inconsistently sampled wards and summary figures.
+            """
+    
+            print("Starting data continuity cleaning...")
+    
+            # Ensure year and month are integers
+            self.muac_data_filtered['year'] = self.muac_data_filtered['year'].astype(int)
+            self.muac_data_filtered['month'] = self.muac_data_filtered['month'].astype(int)
+    
+            # Ensure date column exists with strict error handling
+            self.muac_data_filtered['date'] = pd.to_datetime(
+                self.muac_data_filtered[['year', 'month']].assign(day=1),
+                errors='raise'
             )
-            .reset_index()
-        )
+    
+            # Summary of each ward's date coverage
+            ward_summary = (
+                self.muac_data_filtered.groupby('Ward')
+                .agg(
+                    first_observation=('date', 'min'),
+                    last_observation=('date', 'max'),
+                    total_months=('date', 'nunique')
+                )
+                .reset_index()
+            )
+    
+            def calculate_gaps(row):
+    
+                # Work only with this ward
+                ward_data = self.muac_data_filtered[
+                    self.muac_data_filtered['Ward'] == row['Ward']
+                ].dropna(subset=['wasting'])
+    
+                # Build observed dates from year + month (again, independent of any old columns)
+                ward_data = ward_data.sort_values(['year', 'month'])
+                observed_dates = pd.DatetimeIndex(
+                    pd.to_datetime(ward_data[['year','month']].assign(day=1))
+                ).sort_values().unique()
 
-        def calculate_gaps(row):
-            ward_data = self.muac_data_filtered[self.muac_data_filtered['Ward'] == row['Ward']].dropna(subset=['wasting'])
-            ward_data['time'] = pd.to_datetime(ward_data[['year', 'month']].assign(day=1))
-            observed_dates = ward_data['time']
-            dataset_start = self.muac_data_filtered['date'].min()
-            dataset_end = self.muac_data_filtered['date'].max()
+    
+                # Global dataset start/end (from filtered data)
+                dataset_start = self.muac_data_filtered['date'].min()
+                dataset_end = self.muac_data_filtered['date'].max()
+    
+                # Full range between first and last observation for this ward
+                full_range = pd.date_range(start=row['first_observation'],
+                                        end=row['last_observation'], freq='MS')
+                missing_months = full_range.difference(observed_dates)
+    
+                #  use longest continuous gap, not total missing months
+                gap_size = self._max_consecutive_gap(missing_months)
+    
+    
+                # Initial gap before first observation
+                initial_gap_range = pd.date_range(
+                    start=dataset_start,
+                    end=row['first_observation'] - pd.DateOffset(months=1),
+                    freq='MS'
+                )
+                initial_gap_size = len(initial_gap_range.difference(observed_dates))
+    
+                # End gap after last observation
+                end_gap_range = pd.date_range(
+                    start=row['last_observation'] + pd.DateOffset(months=1),
+                    end=dataset_end,
+                    freq='MS'
+                )
+                end_gap_size = len(end_gap_range.difference(observed_dates))
+    
+                # Pre-2024 gaps
+                jan_2024 = pd.Timestamp('2024-01-01')
+                pre_2024_range = pd.date_range(
+                    start=row['first_observation'],
+                    end=jan_2024 - pd.DateOffset(months=1),
+                    freq='MS'
+                )
+                pre_2024_gaps = pre_2024_range.difference(observed_dates)
+                pre_2024_gap_size = len(pre_2024_gaps)
+    
+                # Post-2024 continuity
+                ward_time = pd.DatetimeIndex(pd.to_datetime(
+                    ward_data[['year','month']].assign(day=1))).sort_values().unique()
+                post_2024_time = ward_time[ward_time >= jan_2024]  # DatetimeIndex
 
-            full_range = pd.date_range(start=row['first_observation'], end=row['last_observation'], freq='MS')
-            missing_months = full_range.difference(observed_dates)
-            gap_size = self._max_consecutive_gap(missing_months)
+                
+                if post_2024_time.size == 0:
+                    post_2024_continuous = False
+                else:
+                    post_2024_range = pd.date_range(
+                        start=jan_2024,
+                        end=row['last_observation'],
+                        freq='MS'
+                    )
+                    post_2024_gaps = post_2024_range.difference(post_2024_time)
+                    post_2024_continuous = (len(post_2024_gaps) == 0)
+                
+                if post_2024_continuous:
+                    continuity_status = 'Continuous after January 2024'
+                elif initial_gap_size > 0 and gap_size == 0:
+                    continuity_status = 'Continuous after introduction'
+                elif gap_size == 0:
+                    continuity_status = 'Continuous'
+                else:
+                    continuity_status = 'Has gaps'
 
-            initial_gap_range = pd.date_range(start=dataset_start, end=row['first_observation'] - pd.DateOffset(months=1), freq='MS')
-            initial_gap_size = len(initial_gap_range.difference(observed_dates))
 
-            end_gap_range = pd.date_range(start=row['last_observation'] + pd.DateOffset(months=1), end=dataset_end, freq='MS')
-            end_gap_size = len(end_gap_range.difference(observed_dates))
+    
+                return pd.Series({
+                    'gap_size': gap_size,
+                    'initial_gap_size': initial_gap_size,
+                    'end_gap_size': end_gap_size,
+                    'pre_2024_gap_size': pre_2024_gap_size,
+                    'post_2024_continuous': post_2024_continuous,
+                    'continuity_status': continuity_status
+                })
+    
+            # --- Compute gaps + build ward summary (ONCE) ---
+            gap_details = ward_summary.apply(calculate_gaps, axis=1)
+            final_ward_summary = pd.concat([ward_summary, gap_details], axis=1)
+            
+            print(final_ward_summary[['Ward', 'first_observation', 'last_observation',
+                                      'total_months', 'gap_size', 'initial_gap_size',
+                                      'end_gap_size', 'pre_2024_gap_size',
+                                      'post_2024_continuous', 'continuity_status']])
+            
+            # --- Apply selection rules (same as yours) ---
+            valid_wards = final_ward_summary[
+                (final_ward_summary['total_months'] >= total_months_min) &
+                (final_ward_summary['gap_size'] <= max_gap_size)
+            ]
+            
+            post_2024_only_wards = final_ward_summary[
+                (~final_ward_summary['Ward'].isin(valid_wards['Ward'])) &
+                (final_ward_summary['post_2024_continuous'])
+            ]
+            
+            valid_wards_list = valid_wards['Ward'].tolist()
+            post_2024_only_list = post_2024_only_wards['Ward'].tolist()
+            
+            # IMPORTANT: .copy() avoids chained-assignment weirdness later
+            self.muac_data_filtered = self.muac_data_filtered[
+                (self.muac_data_filtered['Ward'].isin(valid_wards_list)) |
+                ((self.muac_data_filtered['Ward'].isin(post_2024_only_list)) &
+                 (self.muac_data_filtered['year'] >= 2024))
+            ].copy()
+            
+            # Rebuild date from year+month (same as yours)
+            self.muac_data_filtered['date'] = pd.to_datetime(
+                self.muac_data_filtered[['year', 'month']].assign(day=1),
+                errors='raise'
+            )
+            
+            start_date = self.muac_data_filtered['date'].min().strftime('%Y_%m')
+            end_date   = self.muac_data_filtered['date'].max().strftime('%Y_%m')
+            print(f"MUAC data time frame: {start_date} to {end_date}")
+            
+            # --- Keep HIS file naming (two outputs) ---
+            filename  = f"Kenya_NDMA_MUAC_ward_level_{start_date}_to_{end_date}.pkl"
+            filename2 = f"Kenya_NDMA_MUAC_ward_level_{start_date}_Onwards.pkl"
+            
+            output_path1 = os.path.join(self.input_path, filename)
+            output_path2 = os.path.join(self.input_path, filename2)
+            
+            self.muac_data_filtered.to_pickle(output_path1)
+            self.muac_data_filtered.to_pickle(output_path2)
+            
+            print(f"Filtered MUAC dataset saved to {output_path2}")  # prints the last one like his
+            
+            print(f"Total selected wards: {len(valid_wards_list) + len(post_2024_only_list)}")
+            print(f"Wards selected due to post-2024 continuity: {len(post_2024_only_list)}")
+            print(f"Final dataset shape: {self.muac_data_filtered.shape}")
+            
+            # --- Folders for plots ---
+            inconsistent_folder = os.path.join(folder_images, "inconsistent_wards")
+            summary_folder = os.path.join(folder_images, "summary_plots")
+            if save_plots:
+                os.makedirs(inconsistent_folder, exist_ok=True)
+                os.makedirs(summary_folder, exist_ok=True)
+            
+            # === 1) Plot per post-2024-only ward (same idea as yours)
+            for ward in post_2024_only_list:
+                ward_data = self.muac_data[self.muac_data['Ward'] == ward].copy()
+                ward_data['time'] = pd.to_datetime(ward_data[['year', 'month']].assign(day=1), errors='coerce')
+                ward_data = ward_data.dropna(subset=['time'])
+            
+                if not ward_data.empty:
+                    fig, ax1 = plt.subplots(figsize=(12, 6))
+                    ax1.plot(ward_data['time'], ward_data['wasting'],
+                             marker='o', linestyle='-', color='b', label='Wasting Prevalence')
+                    ax2 = ax1.twinx()
+                    ax2.plot(ward_data['time'], ward_data['wasting_risk'],
+                             marker='x', linestyle='-', color='r', label='Wasting Risk')
+                    ax1.set_xlabel('Time')
+                    ax1.set_ylabel('Wasting Prevalence', color='b')
+                    ax2.set_ylabel('Wasting Risk', color='r')
+                    plt.title(f'Wasting Prevalence Over Time - {ward}')
+                    plt.tight_layout()
+            
+                    safe_filename = ward.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                    file_path = os.path.join(inconsistent_folder, f"wasting_prevalence_{safe_filename}.png")
+                    if save_plots:
+                        plt.savefig(file_path)
+                        print(f"Saved: {file_path}")
+                    if plot:
+                        plt.show()
+                    plt.close()
+            
+            # === 2) Plot average wasting prevalence (all vs filtered)
+            avg_all = self.muac_data.groupby(['year', 'month'])['wasting'].mean().reset_index()
+            avg_all['date'] = pd.to_datetime(avg_all[['year', 'month']].assign(day=1), errors='coerce')
+            avg_all = avg_all.dropna(subset=['date'])
+            
+            avg_filtered = self.muac_data_filtered.groupby(['year', 'month'])['wasting'].mean().reset_index()
+            avg_filtered['date'] = pd.to_datetime(avg_filtered[['year', 'month']].assign(day=1), errors='coerce')
+            avg_filtered = avg_filtered.dropna(subset=['date'])
+            
+            plt.figure(figsize=(12, 6))
+            plt.plot(avg_all['date'], avg_all['wasting'], label='All Wards', marker='o')
+            plt.plot(avg_filtered['date'], avg_filtered['wasting'], label='Filtered Wards', marker='x', linestyle='--')
+            plt.axhline(y=0, color='black', linestyle='--')
+            plt.title('Average Wasting Prevalence Over Time')
+            plt.xlabel('Date')
+            plt.ylabel('Average Wasting')
+            plt.legend()
+            plt.tight_layout()
+                                        
+            if save_plots:
+                path = os.path.join(summary_folder, "average_wasting_prevalence.png")
+                plt.savefig(path)
+                print(f"Saved: {path}")
+            if plot:
+                plt.show()
+            plt.close()
+            
+            # === 3) Map of eliminated vs remaining wards
+            missing = self.wards_shapefile[self.wards_shapefile['Ward'].isin(
+                self.muac_data[~self.muac_data['Ward'].isin(self.muac_data_filtered['Ward'])]['Ward']
+            )]
+            self.wards_final = self.wards_shapefile[
+                self.wards_shapefile['Ward'].isin(self.muac_data_filtered['Ward'])
+            ]
+            
+            fig, ax = plt.subplots(figsize=(10, 8))
+            missing.plot(ax=ax, color='red', edgecolor='black')
+            self.wards_final.plot(ax=ax, color='lightblue', edgecolor='black')
+            red_patch = mpatches.Patch(color='red', label='Eliminated Wards')
+            blue_patch = mpatches.Patch(color='lightblue', label='Remaining Wards')
+            plt.legend(handles=[red_patch, blue_patch])
+            plt.title("Wards After Continuity Cleaning")
+            plt.tight_layout()
+            if save_plots:
+                path = os.path.join(summary_folder, "remaining_vs_eliminated_wards.png")
+                plt.savefig(path)
+                print(f"Saved: {path}")
+            if plot:
+                plt.show()
+            plt.close()
 
-            jan_2024 = pd.Timestamp('2024-01-01')
-            pre_2024_range = pd.date_range(start=row['first_observation'], end=jan_2024 - pd.DateOffset(months=1), freq='MS')
-            pre_2024_gaps = pre_2024_range.difference(observed_dates)
-            pre_2024_gap_size = len(pre_2024_gaps)
-
-            post_2024_data = ward_data[ward_data['time'] >= jan_2024]
-            if post_2024_data.empty:
-                post_2024_continuous = False
-            else:
-                post_2024_range = pd.date_range(start=jan_2024, end=row['last_observation'], freq='MS')
-                post_2024_gaps = post_2024_range.difference(post_2024_data['time'])
-                post_2024_continuous = len(post_2024_gaps) == 0
-
-            if post_2024_continuous:
-                continuity_status = 'Continuous after January 2024'
-            elif gap_size == 0:
-                continuity_status = 'Continuous'
-            elif initial_gap_size > 0 and gap_size == 0:
-                continuity_status = 'Continuous after introduction'
-            else:
-                continuity_status = 'Has gaps'
-
-            return pd.Series({
-                'gap_size': gap_size,
-                'initial_gap_size': initial_gap_size,
-                'end_gap_size': end_gap_size,
-                'pre_2024_gap_size': pre_2024_gap_size,
-                'post_2024_continuous': post_2024_continuous,
-                'continuity_status': continuity_status
-            })
-
-        gap_details = ward_summary.apply(calculate_gaps, axis=1)
-        final_ward_summary = pd.concat([ward_summary, gap_details], axis=1)
-
-        print(final_ward_summary[['Ward', 'first_observation', 'last_observation', 
-                                'total_months', 'gap_size', 'initial_gap_size', 
-                                'end_gap_size', 'pre_2024_gap_size', 
-                                'post_2024_continuous', 'continuity_status']])
-
-        valid_wards = final_ward_summary[
-            (final_ward_summary['total_months'] >= total_months_min) &
-            (final_ward_summary['gap_size'] <= max_gap_size)
-        ]
-
-        post_2024_only_wards = final_ward_summary[
-            (~final_ward_summary['Ward'].isin(valid_wards['Ward'])) &
-            (final_ward_summary['post_2024_continuous'])
-        ]
-
-        valid_wards_list = valid_wards['Ward'].tolist()
-        post_2024_only_list = post_2024_only_wards['Ward'].tolist()
-
-        self.muac_data_filtered = self.muac_data_filtered[
-            (self.muac_data_filtered['Ward'].isin(valid_wards_list)) |
-            ((self.muac_data_filtered['Ward'].isin(post_2024_only_list)) &
-            (self.muac_data_filtered['year'] >= 2024))
-        ]
-
-        self.muac_data_filtered['date'] = pd.to_datetime(
-            self.muac_data_filtered['year'].astype(str) + '-' +
-            self.muac_data_filtered['month'].astype(str).str.zfill(2) + '-01'
-        )
-
-        start_date = self.muac_data_filtered['date'].min().strftime('%Y_%m')
-        end_date = self.muac_data_filtered['date'].max().strftime('%Y_%m')
-
-        print(f"MUAC data time frame: {start_date} to {end_date}")
-
-        # ✅ Build the filename
-        filename = f"Kenya_NDMA_MUAC_ward_level_{start_date}_to_{end_date}.pkl"
-        filename2 = f"Kenya_NDMA_MUAC_ward_level_{start_date}_Onwards.pkl"
-
-        # ✅ Save the filtered dataset
-        output_path = os.path.join(self.input_path, filename)
-        self.muac_data_filtered.to_pickle(output_path)
-
-        output_path = os.path.join(self.input_path, filename2)
-        self.muac_data_filtered.to_pickle(output_path)
-
-        print(f"Filtered MUAC dataset saved to {output_path}")
-
-        print(f"Total selected wards: {len(valid_wards_list) + len(post_2024_only_list)}")
-        print(f"Wards selected due to post-2024 continuity: {len(post_2024_only_list)}")
-        print(f"Final dataset shape: {self.muac_data_filtered.shape}")
-
-        # Create folders if saving
-        inconsistent_folder = os.path.join(folder_images, "inconsistent_wards")
-        summary_folder = os.path.join(folder_images, "summary_plots")
-        if save_plots:
-            os.makedirs(inconsistent_folder, exist_ok=True)
-            os.makedirs(summary_folder, exist_ok=True)
-
-        # === 1. Save plot per post-2024-only ward
-        for ward in post_2024_only_list:
-            ward_data = self.muac_data[self.muac_data['Ward'] == ward]
-            ward_data['time'] = pd.to_datetime(ward_data[['year', 'month']].assign(day=1))
-            if not ward_data.empty:
-                fig, ax1 = plt.subplots(figsize=(12, 6))
-                ax1.plot(ward_data['time'], ward_data['wasting'], marker='o', linestyle='-', color='b', label='Wasting Prevalence')
-                ax2 = ax1.twinx()
-                ax2.plot(ward_data['time'], ward_data['wasting_risk'], marker='x', linestyle='-', color='r', label='Wasting Risk')
-                ax1.set_xlabel('Time')
-                ax1.set_ylabel('Wasting Prevalence', color='b')
-                ax2.set_ylabel('Wasting Risk', color='r')
-                plt.title(f'Wasting Prevalence Over Time - {ward}')
-                plt.tight_layout()
-                safe_filename = ward.replace(" ", "_").replace("/", "_").replace("\\", "_")
-                file_path = os.path.join(inconsistent_folder, f"wasting_prevalence_{safe_filename}.png")
-                if save_plots:
-                    plt.savefig(file_path)
-                    print(f"Saved: {file_path}")
-                if plot:
-                   plt.show()
-                   plt.close()
-
-        # === 2. Plot average wasting prevalence (all vs filtered)
-        avg_all = (
-            self.muac_data.groupby(['year', 'month'])['wasting'].mean().reset_index()
-        )
-        avg_all['date'] = pd.to_datetime(avg_all[['year', 'month']].assign(day=1))
-
-        avg_filtered = (
-            self.muac_data_filtered.groupby(['year', 'month'])['wasting'].mean().reset_index()
-        )
-        avg_filtered['date'] = pd.to_datetime(avg_filtered[['year', 'month']].assign(day=1))
-
-        plt.figure(figsize=(12, 6))
-        plt.plot(avg_all['date'], avg_all['wasting'], label='All Wards', marker='o')
-        plt.plot(avg_filtered['date'], avg_filtered['wasting'], label='Filtered Wards', marker='x', linestyle='--')
-        plt.axhline(y=0, color='black', linestyle='--')
-        plt.title('Average Wasting Prevalence Over Time')
-        plt.xlabel('Date')
-        plt.ylabel('Average Wasting')
-        plt.legend()
-        plt.tight_layout()
-        if save_plots:
-            path = os.path.join(summary_folder, "average_wasting_prevalence.png")
-            plt.savefig(path)
-            print(f"Saved: {path}")
-        if plot:
-                   plt.show()
-                   plt.close()
-
-        # === 3. Map of eliminated vs remaining wards
-        missing = self.wards_shapefile[self.wards_shapefile['Ward'].isin(
-            self.muac_data[~self.muac_data['Ward'].isin(
-                self.muac_data_filtered['Ward'])]['Ward']
-        )]
-        self.wards_final = self.wards_shapefile[
-            self.wards_shapefile['Ward'].isin(self.muac_data_filtered['Ward'])]
-
-        fig, ax = plt.subplots(figsize=(10, 8))
-        missing.plot(ax=ax, color='red', edgecolor='black')
-        self.wards_final.plot(ax=ax, color='lightblue', edgecolor='black')
-        red_patch = mpatches.Patch(color='red', label='Eliminated Wards')
-        blue_patch = mpatches.Patch(color='lightblue', label='Remaining Wards')
-        plt.legend(handles=[red_patch, blue_patch])
-        plt.title("Wards After Continuity Cleaning")
-        plt.tight_layout()
-        if save_plots:
-            path = os.path.join(summary_folder, "remaining_vs_eliminated_wards.png")
-            plt.savefig(path)
-            print(f"Saved: {path}")
-        if plot:
-                   plt.show()
-                   plt.close()
 
 
     def merge_travel_time(self, generate_plot=True, save_plot=True, plot=True, 

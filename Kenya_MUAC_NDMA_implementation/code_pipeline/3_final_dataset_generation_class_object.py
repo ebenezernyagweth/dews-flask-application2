@@ -2028,6 +2028,10 @@ builder.join_datasets_and_eliminate_duplicates()
 builder.eliminate_prevalences_with_insufficient_obs(min_num_obs_ward=35)
 builder.clean_for_data_continuity(total_months_min=6, max_gap_size=3)
 
+last_year = int(new_muac_data["Year"].max())
+analysis_years = (2021, last_year)
+
+print(f"Detected analysis years: {analysis_years}")
 # Merge static & dynamic variables
 
 # filename = f"era5_stats_{start_Month_Year}_to_{end_Month_Year}.pkl"
@@ -2041,25 +2045,25 @@ builder.merge_temperature_data(main_file="era5_temperature_stats_2004_01_Onwards
                             # new_file=f"era5_stats_{start_Month_Year}_to_{end_Month_Year}.pkl",
                             new_file=None,                           
                             baseline_years=(2004, 2020),
-                            analysis_years=(2021, 2025))
+                            analysis_years=analysis_years)
 
 builder.merge_precipitation_data(main_file="chirps_precipitation_stats_2004_01_Onwards.pkl",
                                 # new_file=f"chirps_stats_{start_Month_Year}_to_{end_Month_Year}.pkl",
                                 new_file=None,                                
                                 baseline_years=(2004, 2020),
-                                analysis_years=(2021, 2025))
+                                analysis_years=analysis_years)
 
 builder.merge_ndvi_evi_data(main_file="modis_ndvi_evi_stats_2016_01_Onwards.pkl",
                             # new_file=f"modis_ndvi_evi_stats_{start_Month_Year}_to_{end_Month_Year}.pkl",
                             new_file=None,
                             baseline_years=(2016, 2020),
-                            analysis_years=(2021, 2025))
+                            analysis_years=analysis_years)
 
 builder.merge_ndvi_evi_by_land_use(main_file="modis_evi_by_land_use_stats_2016_01_Onwards.pkl",
                             # new_file=f"modis_evi_by_land_use_stats_{start_Month_Year}_to_{end_Month_Year}.pkl",
                             new_file=None,                            
                             baseline_years=(2016, 2020),
-                            analysis_years=(2021, 2025))
+                            analysis_years=analysis_years)
 
 builder.merge_land_use_data(main_file="land_use_pct_stats_2016_01_Onwards.pkl",
                             # new_file=f"land_use_pct_stats_{start_Month_Year}_to_{end_Month_Year}.pkl")

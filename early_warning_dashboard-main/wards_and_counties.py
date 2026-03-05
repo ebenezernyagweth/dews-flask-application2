@@ -131,11 +131,11 @@ PATTERNS = {
 }
 
 # === Covariate plots to always copy ===
-COVARIATE_FILES = [
-    "precip_zscore_vs_wasting_2021_2025.png",
-    "evi_ndvi_zscore_vs_wasting_2021_2025.png",
-    "conflict_fatalities_trends.png",
-]
+COVARIATE_PATTERNS = {
+    "precip": "precip_zscore_vs_wasting_*.png",
+    "evi_ndvi": "evi_ndvi_zscore_vs_wasting_*.png",
+    "conflict": "conflict_fatalities_trends*.png"
+}
 
 DATE_RE = re.compile(r"_(\d{4}-\d{2})_multiH\.png$", re.IGNORECASE)
 
@@ -167,15 +167,20 @@ def copy_one(outcome: str, pattern: str):
 
 def copy_covariate_graphs():
     copied = []
-    for fname in COVARIATE_FILES:
-        src = COV_DIR / fname
-        if src.exists():
+
+    for label, pattern in COVARIATE_PATTERNS.items():
+        matches = sorted(COV_DIR.glob(pattern))
+
+        if matches:
+            src = matches[-1]  # take the newest (alphabetically works because years increase)
             dest = ASSETS_DIR / src.name
             shutil.copy2(src, dest)
+
             copied.append(dest)
-            print(f"[covariate] Copied {src} -> {dest}")
+            print(f"[covariate] Copied latest {label}: {src} -> {dest}")
         else:
-            print(f"[covariate] Missing file: {src}")
+            print(f"[covariate] No file found for pattern: {pattern}")
+
     return copied
 
 if __name__ == "__main__":

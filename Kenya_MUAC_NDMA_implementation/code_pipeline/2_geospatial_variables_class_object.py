@@ -553,7 +553,7 @@ class SecondaryVariableGenerator:
 #--------------- EVI/NDVI (250m) --------------------#
 #============================================================
     def get_modis_ndvi_evi_by_month(self, year, month, polygons_ee):
-        modis = ee.ImageCollection("MODIS/061/MOD13Q1") \
+        modis = ee.ImageCollection("NASA/VIIRS/002/VNP13A1") \
             .filter(ee.Filter.calendarRange(year, year, 'year')) \
             .filter(ee.Filter.calendarRange(month, month, 'month')) \
             .select(['NDVI', 'EVI'])
@@ -563,7 +563,7 @@ class SecondaryVariableGenerator:
         stats = monthly_avg.reduceRegions(
             collection=polygons_ee,
             reducer=ee.Reducer.mean(),
-            scale=250
+            scale=500
         ).map(lambda f: f.set('year', year).set('month', month))
 
         return stats
@@ -574,7 +574,7 @@ class SecondaryVariableGenerator:
         polygons_gdf,
         polygon_id_col="Ward",
         chunk_size=10,
-        scale=250,
+        scale=500,
         bucket_name=None
     ):
         bucket_name = bucket_name or self.bucket_name
@@ -718,7 +718,7 @@ class SecondaryVariableGenerator:
                 .reduce(ee.Reducer.mode()) \
                 .eq(land_use_class)
 
-            modis_ndvi_proj = ee.ImageCollection("MODIS/061/MOD13Q1") \
+            modis_ndvi_proj = ee.ImageCollection("NASA/VIIRS/002/VNP13A1") \
                 .first() \
                 .select('NDVI') \
                 .projection()
@@ -750,7 +750,7 @@ class SecondaryVariableGenerator:
             modis_mask = modis_mask.Or(land_cover.eq(cls))
 
         
-        modis_ndvi_proj = ee.ImageCollection("MODIS/061/MOD13Q1") \
+        modis_ndvi_proj = ee.ImageCollection("NASA/VIIRS/002/VNP13A1") \
             .first() \
             .select('NDVI') \
             .projection()
@@ -763,7 +763,7 @@ class SecondaryVariableGenerator:
         """
         Get NDVI and EVI values from MODIS, clipped to each polygon.
         """
-        modis = ee.ImageCollection("MODIS/061/MOD13Q1") \
+        modis = ee.ImageCollection("NASA/VIIRS/002/VNP13A1") \
                     .filter(ee.Filter.calendarRange(year, year, 'year')) \
                     .filter(ee.Filter.calendarRange(month, month, 'month')) \
                     .select(['NDVI', 'EVI']) \
@@ -773,7 +773,7 @@ class SecondaryVariableGenerator:
         return modis
 
     def process_chunk_with_reduceRegions_all_classes(self, year, month, polygons_chunk, 
-                                                    scale=250, preview=False):
+                                                    scale=500, preview=False):
         """
         Use reduceRegions to process multiple polygons in one request, compute NDVI and EVI for all land use classes,
         and return results tagged with land use class information. Export all classes at once.
@@ -851,7 +851,7 @@ class SecondaryVariableGenerator:
 
     def process_data_in_chunks_EVI_land_use_parallel_all_classes(self,
             start_date, end_date, polygons, chunk_size=20, delay_between_chunks=5,
-            delay_between_months=30, max_retries=3, scale=250):
+            delay_between_months=30, max_retries=3, scale=500):
         """
         Process NDVI/EVI for all land use classes using reduceRegions, in chunks,
         and wait for all exports to finish before proceeding to the next month.
@@ -973,7 +973,7 @@ class SecondaryVariableGenerator:
             output_pkl = f"{self.OUTPUT}/modis_evi_by_land_use_stats_{self._format_dates(self.start_date_evi, self.end_date_evi)}.pkl"
             self.process_data_in_chunks_EVI_land_use_parallel_all_classes(
                 self.start_date_evi, self.end_date_evi, self.polygons, chunk_size=20, delay_between_chunks=5,
-                  delay_between_months=60, max_retries=3, scale=250
+                  delay_between_months=60, max_retries=3, scale=500
             )
             return self.retrieve_and_combine_evi_land_use_exports(output_pkl=output_pkl, 
                                                                   polygon_id_col=self.polygon_id_col,

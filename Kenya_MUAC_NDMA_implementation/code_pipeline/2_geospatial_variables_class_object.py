@@ -558,7 +558,11 @@ class SecondaryVariableGenerator:
             .filter(ee.Filter.calendarRange(month, month, 'month')) \
             .select(['NDVI', 'EVI'])
 
-        monthly_avg = modis.mean().rename(['NDVI_mean', 'EVI_mean'])
+        modis_rescaled = modis.map(
+            lambda img: img.multiply(10000).copyProperties(img, img.propertyNames())
+        )
+
+        monthly_avg = modis_rescaled.mean().rename(['NDVI_mean', 'EVI_mean'])
 
         stats = monthly_avg.reduceRegions(
             collection=polygons_ee,
@@ -763,12 +767,14 @@ class SecondaryVariableGenerator:
         """
         Get NDVI and EVI values from MODIS, clipped to each polygon.
         """
-        modis = ee.ImageCollection("NASA/VIIRS/002/VNP13A1") \
-                    .filter(ee.Filter.calendarRange(year, year, 'year')) \
-                    .filter(ee.Filter.calendarRange(month, month, 'month')) \
-                    .select(['NDVI', 'EVI']) \
-                    .map(lambda img: img.clip(ee_polygon)) \
-                    .mean() 
+        modis = (
+            ee.ImageCollection("NASA/VIIRS/002/VNP13A1")
+            .filter(ee.Filter.calendarRange(year, year, "year"))
+            .filter(ee.Filter.calendarRange(month, month, "month"))
+            .select(["NDVI", "EVI"])
+            .map(lambda img: img.multiply(10000).clip(ee_polygon).copyProperties(img, img.propertyNames()))
+            .mean()
+        )
         
         return modis
 

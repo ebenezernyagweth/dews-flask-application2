@@ -53,7 +53,7 @@ TARGETS = {
         "obs_col_in_hb3": "risk_observed"  # if your _hb_3 files have this; otherwise map below
     }
 }
-ALLOWED_COUNTIES = {"Tana river", "Marsabit", "Isiolo"}
+ALLOWED_COUNTIES = {"Tana river", "Marsabit", "Isiolo", "Wajir"}
 
 # ======================
 # Geo data

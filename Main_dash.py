@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 import glob
 import time
 
-#BASE_DIR = "/home/ebenezer/Desktop/NDMADEWS_ML_DS/dews-flask-application/early_warning_dashboard-main"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = os.path.join(SCRIPT_DIR, "early_warning_dashboard-main")
 
@@ -16,7 +15,7 @@ Computation = os.path.join(BASE_DIR, "compute_trends.py")
 App = os.path.join(BASE_DIR, "app.py")
 
 def simple_stop_server(port=8080):
-    """Simpler version that just tries to kill processes on the port"""
+    """Tries to kill processes on the port using multiple methods"""
     print(f"Attempting to free port {port}...")
     
     commands = [
@@ -36,7 +35,24 @@ def simple_stop_server(port=8080):
             print(f"✗ Command timed out: {cmd}")
         except Exception as e:
             print(f"✗ Command failed: {cmd} - {e}")
-    
+
+    # Fallback: use ps aux to find and kill app.py processes
+    print("Trying ps aux fallback...")
+    try:
+        result = subprocess.run(["ps", "aux"], capture_output=True, text=True)
+        killed = False
+        for line in result.stdout.splitlines():
+            if "app.py" in line and "grep" not in line:
+                pid = int(line.split()[1])
+                os.kill(pid, 9)
+                print(f"✓ Killed app.py process (PID: {pid})")
+                killed = True
+        if killed:
+            time.sleep(1)
+            return True
+    except Exception as e:
+        print(f"✗ Fallback kill failed: {e}")
+
     print(f"No processes found or stopped on port {port}")
     return False
 
@@ -138,7 +154,12 @@ def run_full_pipeline():
     # Step 2: Start dashboard
     if not start_dashboard():
         return False
-    
+    return True
+
+if __name__ == "__main__":
+    run_full_pipeline()
+
+
     # Keep the main process alive so the Flask app continues running
     try:
         print("\n⏳ Dashboard is running. Press Ctrl+C to stop...")
@@ -148,6 +169,3 @@ def run_full_pipeline():
         print("\n\n🛑 Shutting down dashboard...")
         simple_stop_server(8080)
         print("✅ Dashboard stopped successfully!")
-
-if __name__ == "__main__":
-    run_full_pipeline()

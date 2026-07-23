@@ -24,7 +24,7 @@ app = dash.Dash(
     assets_folder="assets",
     assets_url_path="/assets",
 )
-app.title = "Wasting Prediction Dashboard"
+#app.title = "Wasting Prediction Dashboard"
 
 # ---- Attach basic auth if enabled ----
 if USE_DASH_AUTH:
@@ -53,14 +53,20 @@ TARGETS = {
         "obs_col_in_hb3": "risk_observed"  # if your _hb_3 files have this; otherwise map below
     }
 }
-ALLOWED_COUNTIES = {"Tana river", "Marsabit", "Isiolo", "Wajir"}
+ALLOWED_COUNTIES = {"tana river", "marsabit", "isiolo"}
+
+def norm_text(s):
+    return s.astype(str).str.strip()
+
+def norm_county(s):
+    return s.astype(str).str.strip().str.lower()
 
 # ======================
 # Geo data
 # ======================
 gdf = gpd.read_file("data/Kenya_wards_with_counties.geojson")
-gdf["Ward"] = gdf["Ward"].astype(str).str.strip()
-
+gdf["Ward"] = norm_text(gdf["Ward"])
+gdf["County"] = norm_county(gdf["County"])
 # Keep only wards in the allowed counties
 if "County" in gdf.columns:
     gdf = gdf[gdf["County"].isin(ALLOWED_COUNTIES)].copy()
@@ -91,6 +97,10 @@ def _standardize_hb(df, target_key, horizon):
 
     # --- Normalize Ward ---
     df["Ward"] = df["Ward"].astype(str).str.strip()
+
+    # --- Normalize County (if present) ---
+    if "County" in df.columns:
+        df["County"] = norm_county(df["County"])
 
     # --- Standardize dates ---
     df["time_period"] = pd.to_datetime(df["time_period"], errors="coerce") \
@@ -184,9 +194,13 @@ def load_all_for_target(target_key):
     trend_file = TARGETS[target_key]["trend_file"]
     trend_df = pd.read_csv(trend_file)
 
-    trend_df["Ward"] = trend_df["Ward"].astype(str).str.strip()
+    trend_df["Ward"] = norm_text(trend_df["Ward"])
     trend_df["time_period"] = pd.to_datetime(trend_df["time_period"]) \
                                 .dt.to_period("M").dt.start_time
+
+    if "County" in trend_df.columns:
+        trend_df["County"] = norm_county(trend_df["County"])
+
 
     trend_df = trend_df[trend_df["County"].isin(ALLOWED_COUNTIES)].copy()
     trend_df = trend_df[trend_df["Ward"].isin(allowed_wards)].copy()
@@ -196,9 +210,7 @@ def load_all_for_target(target_key):
         hb3["observed"] = pd.NA
 
     # ---------------- Last observed month ----------------
-    last_obs = hb3.loc[hb3["observed"].notna(), "time_period"].max()
-    if pd.isna(last_obs):
-        last_obs = hb3["time_period"].max()
+    last_obs = trend_df["time_period"].max()
 
     last_map_month_str = pd.Timestamp(last_obs).strftime("%Y-%m")
 
@@ -613,6 +625,81 @@ def _table_last_n_months_ci(hb1_unused, hb2_unused, hb3, ward, end_ts, n=10, cou
     }
 
     return [h["row"] for h in hist_keep] + [summary_row] + [f["row"] for f in fut_keep]
+
+def build_ward_monthly_frame(hb3, trend_df, ward, county=None, end_month=None):
+    """
+    Month grid for one ward:
+      - observed comes from trend_df (same as maps)
+      - pred/CI comes from hb3
+      - months exist even if hb3 is missing them
+      - timeline spans from earliest available month to latest (obs/pred/ref)
+    """
+    import pandas as pd
+
+    w = str(ward).strip()
+
+    # ---- observed (source of truth for observed map) ----
+    obs = trend_df[["Ward","County","time_period","observed"]].copy()
+    obs["Ward"] = obs["Ward"].astype(str).str.strip()
+    obs["time_period"] = pd.to_datetime(obs["time_period"], errors="coerce") \
+                           .dt.to_period("M").dt.start_time
+
+    if county is not None and "County" in obs.columns:
+        obs = obs[(obs["Ward"] == w) & (obs["County"] == county)]
+    else:
+        obs = obs[obs["Ward"] == w]
+
+    obs = obs[["time_period", "observed"]].drop_duplicates("time_period", keep="last")
+    obs["observed"] = pd.to_numeric(obs["observed"], errors="coerce")
+
+    # ---- hb3 predictions/CIs ----
+    pred = hb3[["Ward","County","time_period","pred_3mo","lower_bound_3mo","upper_bound_3mo"]].copy()
+    pred["Ward"] = pred["Ward"].astype(str).str.strip()
+    pred["time_period"] = pd.to_datetime(pred["time_period"], errors="coerce") \
+                            .dt.to_period("M").dt.start_time
+
+    if county is not None and "County" in pred.columns:
+        pred = pred[(pred["Ward"] == w) & (pred["County"] == county)]
+    else:
+        pred = pred[pred["Ward"] == w]
+
+    pred = pred[["time_period", "pred_3mo", "lower_bound_3mo", "upper_bound_3mo"]] \
+              .drop_duplicates("time_period", keep="last")
+
+    for c in ["pred_3mo", "lower_bound_3mo", "upper_bound_3mo"]:
+        pred[c] = pd.to_numeric(pred[c], errors="coerce")
+
+    # ---- decide calendar start/end correctly ----
+    min_obs  = obs["time_period"].min() if not obs.empty else pd.NaT
+    max_obs  = obs["time_period"].max() if not obs.empty else pd.NaT
+    min_pred = pred["time_period"].min() if not pred.empty else pd.NaT
+    max_pred = pred["time_period"].max() if not pred.empty else pd.NaT
+
+    start_candidates = [t for t in [min_obs, min_pred] if pd.notna(t)]
+    end_candidates   = [t for t in [max_obs, max_pred, end_month] if pd.notna(t)]
+
+    if not start_candidates or not end_candidates:
+        return pd.DataFrame(columns=["time_period", "observed", "pred_3mo", "lower_bound_3mo", "upper_bound_3mo"])
+
+    start_month = min(start_candidates)
+    end_month   = max(end_candidates)
+
+    start_month = pd.Period(start_month, "M").to_timestamp()
+    end_month   = pd.Period(end_month, "M").to_timestamp()
+
+    idx = pd.period_range(start_month.to_period("M"), end_month.to_period("M"), freq="M").to_timestamp()
+    base = pd.DataFrame({"time_period": idx})
+
+    out = (base
+           .merge(obs,  on="time_period", how="left")
+           .merge(pred, on="time_period", how="left"))
+
+    # add labels back (useful for downstream funcs / debugging)
+    out["Ward"] = w
+    if county is not None:
+        out["County"] = county
+
+    return out.sort_values("time_period")
 
 
 COLOR_WITHIN = "#EEF7EE"   # within CI
@@ -1265,7 +1352,7 @@ app.layout = html.Div([
                         html.P([
                             "The anticipatory action trigger presented in this dashboard is anchored to ",
                             html.B("the WHO guidance on the public health significance of wasting"),
-                            ". This way, a ward is triggered for anticipatory aciton purposes if"
+                            ". This way, a ward is triggered for anticipatory action purposes if"
                         ], style={"margin": "0 0 6px 0", "fontSize": "12.5px", "lineHeight": "1.45"}),
 
                         html.Ul([
@@ -1349,7 +1436,7 @@ app.layout = html.Div([
                         "paddingRight": "8px",
                     }),
                     html.Div([
-                        html.H6("Last 9 Months — Wasting Prevalence"),
+                        html.H6("Last 6 Months — Wasting Prevalence"),
                         make_ci_table("prev-ward-table"),
                     ], style={
                         "width": "31%",
@@ -1371,7 +1458,7 @@ app.layout = html.Div([
                     }),
                     # --- Risk mini table ---
                     html.Div([
-                        html.H6("Last 9 Months — Wasting Risk Prevalence"),
+                        html.H6("Last 6 Months — Wasting Risk Prevalence"),
                         make_ci_table("risk-ward-table"),
                     ], style={
                         "width": "31%",
@@ -1538,6 +1625,24 @@ def render_compare_ward_timeseries(county, ward, months_val, month_str):
 
     # charts time window
     months_back = None if (months_val in (None, -1)) else int(months_val)
+    ref_ts = pd.Period(month_str, freq="M").to_timestamp() if month_str else None
+
+    df_prev = build_ward_monthly_frame(
+        CACHE["wasting"]["hb3"],
+        CACHE["wasting"]["trend_df"],
+        ward,
+        county=county,
+        end_month=ref_ts,   # optional cap; builder will still extend to latest pred
+    )
+
+    df_risk = build_ward_monthly_frame(
+        CACHE["wasting_risk"]["hb3"],
+        CACHE["wasting_risk"]["trend_df"],
+        ward,
+        county=county,
+        end_month=ref_ts,
+    )
+
 
     # -------------------------------
     # 1) FIGURES – ONLY HB3
@@ -1569,24 +1674,21 @@ def render_compare_ward_timeseries(county, ward, months_val, month_str):
     alert_months_risk = _alert_months_for_ward(CACHE["wasting_risk"]["trend_df"], ward, county)
 
     fig_prev = _first_tab_like_ts(
-        None, None,
-        CACHE["wasting"]["hb3"],
-        ward,
-        "Wasting Prevalence",
-        months_back=months_back,
-        county=county,
-        alert_months=alert_months_prev,   # ← IMPORTANT
+    None, None, df_prev, ward, "Wasting Prevalence",
+    end_month_ts=None,
+    months_back=months_back,
+    county=None,  # already filtered
+    alert_months=alert_months_prev
     )
 
     fig_risk = _first_tab_like_ts(
-        None, None,
-        CACHE["wasting_risk"]["hb3"],
-        ward,
-        "Wasting Risk Prevalence",
+        None, None, df_risk, ward, "Wasting Risk Prevalence",
+        end_month_ts=None,
         months_back=months_back,
-        county=county,
-        alert_months=alert_months_risk,   # ← IMPORTANT
+        county=None,
+        alert_months=alert_months_risk
     )
+
 
 
 
@@ -1616,28 +1718,15 @@ def render_compare_ward_timeseries(county, ward, months_val, month_str):
     end_risk = latest_ts_for_hb3(CACHE["wasting_risk"]["hb3"], ward, county=county)
 
     # global end_ts across the two targets
-    valid_ends = [ts for ts in [end_prev, end_risk] if pd.notna(ts)]
-    end_ts = max(valid_ends) if valid_ends else None
-
-    prev_rows = _table_last_n_months_ci(
-        None,  # hb1_unused
-        None,  # hb2_unused
-        CACHE["wasting"]["hb3"],
-        ward,
-        end_ts,
-        n=10,
-        county=county,
+    #valid_ends = [ts for ts in [end_prev, end_risk] if pd.notna(ts)]
+    end_ts = max(
+    pd.to_datetime(df_prev["time_period"], errors="coerce").max(),
+    pd.to_datetime(df_risk["time_period"], errors="coerce").max(),
     )
 
-    risk_rows = _table_last_n_months_ci(
-        None,  # hb1_unused
-        None,  # hb2_unused
-        CACHE["wasting_risk"]["hb3"],
-        ward,
-        end_ts,
-        n=10,
-        county=county,
-    )
+    prev_rows = _table_last_n_months_ci(None, None, df_prev, ward, end_ts, n=10, county=None)
+    risk_rows = _table_last_n_months_ci(None, None, df_risk, ward, end_ts, n=10, county=None)
+
 
     return fig_prev, fig_risk, prev_rows, risk_rows
 
@@ -1756,8 +1845,14 @@ def display_alert_ward_timeseries(month_str):
         cat = ward_category(ward)
         style = CAT_STYLES[cat]
 
-        d_prev = _prep(hb3_prev[hb3_prev["Ward"].astype(str).str.strip() == str(ward)])
-        d_risk = _prep(hb3_risk[hb3_risk["Ward"].astype(str).str.strip() == str(ward)])
+        # Build aligned month grid: observed from trend_df, pred/CI from hb3
+        d_prev = build_ward_monthly_frame(hb3_prev, prev_trend, ward, county=None, end_month=None)
+        d_risk = build_ward_monthly_frame(hb3_risk, risk_trend, ward, county=None, end_month=None)
+
+        # prep (same cleaning / sorting)
+        d_prev = _prep(d_prev)
+        d_risk = _prep(d_risk)
+
 
         # --- Build figure ---
         fig = go.Figure()
@@ -1877,8 +1972,8 @@ def load_predictor_plots(_):
     ]
     evi_paras = [
         ("EVI tracks vegetation greenness and biomass. For each month, the average EVI z-score relative"
-        " to a medium-term 5-year baseline is shown. The z-score shows how the vegetation greenes in that month "
-        "compares to its medium-term normal value. Negative values indicate abnormaly low EVI signal"
+        " to a medium-term 5-year baseline is shown. The z-score shows how the vegetation greenness in that month "
+        "compares to its medium-term normal value. Negative values indicate abnormally low EVI signal"
         " for that month. Persistent declines can therefore indicate reduced forage/crop."),
         ("The number of wasted children in the sample is also overlaid on the graph. The graph shows a spike in the "
          "number of wasted children after two consecutive years of lower than average EVI during both the long and shortrain seasons"
@@ -1886,7 +1981,7 @@ def load_predictor_plots(_):
     ]
     conflict_paras = [
         ("This series counts reported violent conflict events. As an imperfect measure of conflict intensity"
-         "the nuber of total fatalities are also shown."),
+         "the number of total fatalities are also shown."),
         ("The graph indicates a steady increase in the total number of conflicts over time.")
     ]
 

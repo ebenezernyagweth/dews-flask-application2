@@ -2,20 +2,25 @@ from pathlib import Path
 
 from flask import Flask, jsonify
 
-#from HHA_Outliers_Detection_Service import process_outliers
-#from Rainfall_data_extraction import RainfallDataProcessor
+from HHA_Outliers_Detection_Service import process_outliers
+from Rainfall_data_extraction import RainfallDataProcessor
 from flask import request
-#from Milk_Production_Forecasting_Main import process_milk_production_forecasts
-#from Prediction_Residual_Plots import process_residual_plots
-#from Grazing_Dist_Forecasting_Main import process_grazing_distance_forecasts
+from Milk_Production_Forecasting_Main import process_milk_production_forecasts
+from Milk_Production_Forecasting_Main_N import process_milk_production_forecasts_n
+from Prediction_Residual_Plots import process_residual_plots
+from Grazing_Dist_Forecasting_Main import process_grazing_distance_forecasts
+from Grazing_Dist_Forecasting_Main_N import process_grazing_distance_forecasts_n
 from Main_dash import run_full_pipeline
 from main_muac import run_muac_pipelines
 from main_muac import unzip_intermediary_datasets
+from extract_latest_muac import extract_latest_MUAC
 import os
 import requests
 import pandas as pd
 from threading import Lock, Thread
-
+from datetime import datetime
+from main_muac import zip_intermediary_datasets
+import ee
 
 app = Flask(__name__)
 
@@ -47,104 +52,173 @@ def safe_run_muac_pipelines():
         muac_pipeline_lock.release()
 
 
-#@app.route("/")
-#def home():
-#  return "Welcome to the Milk Production API!"
-#
-#
-#@app.route("/service-api/v1/rainfall-data/process-rainfall-data",
-#           methods=["GET"])
-#def process_rainfall_data():
-#  try:
-#    # Initialize the processor
-#    processor = RainfallDataProcessor(
-#        db_user="root",
-#        db_password="*Database630803240081",
-#        db_host="127.0.0.1",
-#        db_name="dews_machine_learning"
-#    )
-#
-#    # Define file paths relative to the project root
-#    nc_file_path = Path("Pr.nc").resolve()
-#    shapefile_path = Path("new_livelihood_zones/new_livelihood_zones.shp").resolve()
-#
-#    # Process rainfall data
-#    processor.processRainfallData(nc_file_path, shapefile_path,
-#                                  specific_wards=None)
-#
-#    # Close the connection
-#    processor.close()
-#
-#    # Return a valid JSON response
-#    return jsonify(
-#        {"message": "Rainfall data processing completed successfully"}), 200
-#
-#  except Exception as e:
-#    return jsonify({"error": str(e)}), 500
-#
-#
-#@app.route("/service-api/v1/outliers/process/outliers-by-county",
-#             methods=["GET"])
-#def process_outliers_by_county():
-#    try:
-#      # Get query parameters from the request
-#      county_id = request.args.get("countyId", type=int)
-#      data_collection_exercise_id = request.args.get("dataCollectionExerciseId",
-#                                                     type=int)
-#
-#
-#      # Call the outlier processing function
-#      process_outliers(county_id, data_collection_exercise_id)
-#
-#      # Return a valid JSON response
-#      return jsonify(
-#          {"message": "Outlier processing completed successfully"}), 200
-#
-#    except Exception as e:
-#      return jsonify({"error": str(e)}), 500
-#
-#@app.route("/service-api/v1/predictions/process/milk-predictions",
-#             methods=["GET"])
-#def process_milk_predictions():
-#    try:
-#      county_id = request.args.get("countyId", type=int)
-#
-#      # Call the outlier processing function
-#      process_milk_production_forecasts(county_id)
-#
-#      process_grazing_distance_forecasts(county_id)
-#
-#      process_residual_plots(county_id, "TotalDailyQntyMilkedInLtrs")
-#
-#      process_residual_plots(county_id, "DistInKmsToWaterSourceFromGrazingArea")
-#
-#      # Return a valid JSON response
-#      return jsonify(
-#          {"message": "Milk predictions processing completed successfully"}), 200
-#
-#
-#    except Exception as e:
-#      print(traceback.format_exc())  # Log full stack trace
-#      return jsonify({"error": str(e)}), 500
-#
-#@app.route("/service-api/v1/predictions/process/residual-plots",
-#             methods=["GET"])
-#def process_residual_plots_api():
-#    try:
-#      county_id = request.args.get("countyId", type=int)
-#      indicator = request.args.get("indicator", type=str)
-#
-#      process_residual_plots(county_id, indicator)
-#
-#      # Return a valid JSON response
-#      return jsonify(
-#          {"message": "Residual plots processing completed successfully"}), 200
-#
-#    except Exception as e:
-#      return jsonify({"error": str(e)}), 500
-#
+@app.route("/")
+def home():
+ return "Welcome to the Milk Production API!"
+
+
+@app.route("/service-api/v1/rainfall-data/process-rainfall-data",
+          methods=["GET"])
+def process_rainfall_data():
+ try:
+   # Initialize the processor
+   processor = RainfallDataProcessor(
+       db_user="root",
+       db_password="*Database630803240081",
+       db_host="127.0.0.1",
+       db_name="dews_machine_learning"
+   )
+
+   # Define file paths relative to the project root
+   nc_file_path = Path("Pr.nc").resolve()
+   shapefile_path = Path("new_livelihood_zones/new_livelihood_zones.shp").resolve()
+
+   # Process rainfall data
+   processor.processRainfallData(nc_file_path, shapefile_path,
+                                 specific_wards=None)
+
+   # Close the connection
+   processor.close()
+
+   # Return a valid JSON response
+   return jsonify(
+       {"message": "Rainfall data processing completed successfully"}), 200
+
+ except Exception as e:
+   return jsonify({"error": str(e)}), 500
+
+
+@app.route("/service-api/v1/outliers/process/outliers-by-county",
+            methods=["GET"])
+def process_outliers_by_county():
+   try:
+     # Get query parameters from the request
+     county_id = request.args.get("countyId", type=int)
+     data_collection_exercise_id = request.args.get("dataCollectionExerciseId",
+                                                    type=int)
+
+
+     # Call the outlier processing function
+     process_outliers(county_id, data_collection_exercise_id)
+
+     # Return a valid JSON response
+     return jsonify(
+         {"message": "Outlier processing completed successfully"}), 200
+
+   except Exception as e:
+     return jsonify({"error": str(e)}), 500
+
+@app.route("/service-api/v1/predictions/process/milk-predictions_n",
+            methods=["GET"])
+def process_milk_predictions_n():
+   try:
+     # Call the outlier processing function
+     process_milk_production_forecasts_n()
+
+     process_grazing_distance_forecasts_n()
+
+     # Return a valid JSON response
+     return jsonify(
+         {"message": "Milk predictions processing completed successfully"}), 200
+
+
+   except Exception as e:
+     print(traceback.format_exc())  # Log full stack trace
+     return jsonify({"error": str(e)}), 500
+
+
+@app.route("/service-api/v1/predictions/process/milk-predictions",
+            methods=["GET"])
+def process_milk_predictions():
+   try:
+     county_id = request.args.get("countyId", type=int)
+     print("START")
+
+     # Call the outlier processing function
+     process_milk_production_forecasts(county_id)
+
+     print("STEP 1 DONE")
+
+     process_grazing_distance_forecasts(county_id)
+     print("STEP 2 DONE")
+
+     process_residual_plots(county_id, "TotalDailyQntyMilkedInLtrs")
+
+     print("STEP 3 DONE")
+
+     process_residual_plots(county_id, "DistInKmsToWaterSourceFromGrazingArea")
+
+     print("STEP 4 DONE")
+
+     # Return a valid JSON response
+     return jsonify(
+         {"message": "Milk predictions processing completed successfully"}), 200
+
+
+   except Exception as e:
+     print(traceback.format_exc())  # Log full stack trace
+     return jsonify({"error": str(e)}), 500
+
+@app.route("/service-api/v1/predictions/process/residual-plots",
+            methods=["GET"])
+def process_residual_plots_api():
+   try:
+     county_id = request.args.get("countyId", type=int)
+     indicator = request.args.get("indicator", type=str)
+
+     process_residual_plots(county_id, indicator)
+
+     # Return a valid JSON response
+     return jsonify(
+         {"message": "Residual plots processing completed successfully"}), 200
+
+   except Exception as e:
+     return jsonify({"error": str(e)}), 500
+
+from datetime import datetime
+
+@app.route("/service-api/v1/muac/process/modeling_validation", methods=["GET", "POST"])
+def api_trigger_muac_pipelines():
+    """
+    Wrapper endpoint that delegates to the main MUAC modeling pipeline endpoint.
+    Useful for calling from other services or scheduled jobs.
+    """
+    today = datetime.now()
+    if today.day < 20:
+        return jsonify({
+            "message": f"MUAC modeling pipeline can only be run from the 20th of each month onwards. "
+                       f"Today is the {today.day}{'th' if 4 <= today.day <= 20 else ['st','nd','rd'][today.day % 10 - 1] if today.day % 10 in [1,2,3] else 'th'}. "
+                       f"Please try again from the 20th — not all datasets are ready for download before this date."
+        }), 425  # 425 Too Early
+
+    # Fast rejection if already running
+    if muac_pipeline_lock.locked():
+        return jsonify({
+            "message": "MUAC pipeline is already running"
+        }), 409
+        
+    try:
+        return jsonify({
+            "message": "MUAC data processing and modeling started"
+        }), 202
+    except Exception as e:
+        return jsonify({"error": f"Failed to trigger MUAC pipeline: {str(e)}"}), 500
+
+
 @app.route("/service-api/v1/muac/process/modeling", methods=["GET", "POST"])
 def api_run_muac_pipelines():
+    # Check if today is on or after the 20th of the month
+    """
+    Wrapper endpoint that delegates to the main MUAC modeling pipeline endpoint.
+    Useful for calling from other services or scheduled jobs.
+    """
+    today = datetime.now()
+    if today.day < 20:
+        return jsonify({
+            "message": f"MUAC modeling pipeline can only be run from the 20th of each month onwards. "
+                       f"Today is the {today.day}{'th' if 4 <= today.day <= 20 else ['st','nd','rd'][today.day % 10 - 1] if today.day % 10 in [1,2,3] else 'th'}. "
+                       f"Please try again from the 20th — not all datasets are ready for download before this date."
+        }), 425  # 425 Too Early
 
     # Fast rejection if already running
     if muac_pipeline_lock.locked():
@@ -152,18 +226,46 @@ def api_run_muac_pipelines():
             "message": "MUAC pipeline is already running"
         }), 409
 
+    # Check Earth Engine tasks
+    ee_busy, count = is_ee_busy()
+    if ee_busy:
+        return jsonify({
+            "message": f"Earth Engine has {count} active task(s). Aborting pipeline run."
+        }), 409      
+
     try:
         Thread(
             target=safe_run_muac_pipelines,
             daemon=True
         ).start()
-
         return jsonify({
             "message": "MUAC data processing and modeling started"
         }), 202
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+#
+# @app.route("/service-api/v1/muac/process/modeling", methods=["GET", "POST"])
+# def api_run_muac_pipelines():
+
+#     # Fast rejection if already running
+#     if muac_pipeline_lock.locked():
+#         return jsonify({
+#             "message": "MUAC pipeline is already running"
+#         }), 409
+
+#     try:
+#         Thread(
+#             target=safe_run_muac_pipelines,
+#             daemon=True
+#         ).start()
+
+#         return jsonify({
+#             "message": "MUAC data processing and modeling started"
+#         }), 202
+
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/service-api/v1/muac/process/dashboard", methods=["GET", "POST"])
 def api_start_muac_dashboard():
@@ -181,6 +283,53 @@ def api_start_muac_dashboard():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/service-api/v1/muac/extract/database", methods=["GET", "POST"])
+def extract_muac_data():
+    """
+    Route that extracts MUAC data from database instead of accepting file uploads.
+    GET request now triggers the database extraction.
+    """
+    try:
+        # Call the extraction function
+        result_df, file_path = extract_latest_MUAC()
+        
+        # Check if extraction was successful
+        if result_df.empty or file_path is None:
+            return jsonify({
+                "error": "No data could be extracted from the database. Please check if there are sufficient HHA records."
+            }), 404
+        
+        # Build success message with data summary
+        return jsonify({
+            "message": f"MUAC data extracted successfully from database and saved as 'MUAC_Data.xlsx'.",
+            "path": file_path,
+            "records_count": len(result_df),
+            "data_summary": {
+                "total_records": len(result_df),
+                "unique_children": result_df['MUACIndicatorID'].nunique(),
+                "counties": result_df['County'].nunique(),
+                "date_range": {
+                    "earliest": result_df['InterviewDate'].min().strftime('%Y-%m-%d') if not result_df['InterviewDate'].isna().all() else None,
+                    "latest": result_df['InterviewDate'].max().strftime('%Y-%m-%d') if not result_df['InterviewDate'].isna().all() else None
+                }
+            }
+        }), 200
+        
+    except ValueError as e:
+        # Handle validation errors from extract_latest_MUAC
+        return jsonify({
+            "error": f"Data validation error: {str(e)}"
+        }), 400
+        
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())  # Log full error for debugging
+        return jsonify({
+            "error": f"An error occurred during data extraction: {str(e)}"
+        }), 500
+
 
 @app.route("/service-api/v1/muac/upload/excel", methods=["GET", "POST"])
 def upload_excel_file():
@@ -378,6 +527,40 @@ def upload_excel_file():
             }), 400
         
         # =============================
+        # CLEAN TEXT COLUMNS (TITLE CASE)
+        # =============================
+        import re
+        import unicodedata
+        
+        def clean_name(s):
+            if pd.isna(s):
+                return pd.NA
+            s = str(s)
+            
+            # Unicode normalization + remove zero-widths/BOM
+            s = unicodedata.normalize('NFKC', s)
+            s = re.sub(r'[\u200B-\u200D\uFEFF]', '', s)
+            
+            # Standardize spaces/separators
+            s = s.replace('\u00A0', ' ')
+            s = re.sub(r'[_]+', ' ', s)
+            s = re.sub(r'\s+', ' ', s)
+            s = re.sub(r'\s*/\s*', '/', s)
+            s = re.sub(r'\s*-\s*', '-', s)
+            
+            # Trim stray punctuation at ends
+            s = s.strip(" '\".,;:()[]{}")
+            
+            # Title case
+            s = s.lower().title()
+            return s
+        
+        # Apply to text columns
+        for col in ['Ward', 'SubCounty', 'County']:
+            if col in df.columns:
+                df[col] = df[col].apply(clean_name)
+        
+        # =============================
         # SAVE REPAIRED FILE
         # =============================
         # Save with proper Excel formatting
@@ -390,6 +573,7 @@ def upload_excel_file():
             repairs_made.append(f"generated {missing_date_count} missing interview dates")
         repairs_made.append("standardized month names to full format")
         repairs_made.append("converted numeric columns to proper format")
+        repairs_made.append("cleaned text columns to title case")
         
         repair_message = f" Repairs: {', '.join(repairs_made)}." if repairs_made else ""
         
@@ -447,9 +631,27 @@ def api_unzip_intermediary_datasets():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-        
+    
+
+@app.route("/service-api/v1/muac/process/compress", methods=["GET", "POST"])
+def api_zip_intermediary_datasets():
+    try:
+        zip_intermediary_datasets()
+        return jsonify({"message": "Compression of intermediary_datasets completed successfully."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500    
+
+def is_ee_busy():
+    try:
+        tasks = ee.batch.Task.list()
+        active = [t for t in tasks if t.state in ["RUNNING", "READY"]]
+        return len(active) > 0, len(active)
+    except Exception as e:
+        print(f"EE check failed: {e}")
+        return False, 0        
 
 if __name__ == "__main__":
   app.run(debug=False, threaded=True, host="0.0.0.0", port=6060)
+
 
 

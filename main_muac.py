@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import glob
+import zipfile
 
 # Constants
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -165,10 +166,10 @@ def get_dates_from_output():
         # Find periods that are NOT in historical data
         missing_periods = new_periods - historical_periods
         
-        # if not missing_periods:
-        #     print("\n✓ All dates in the new data have already been processed!")
-        #     print("No new data to process. Exiting pipeline.")
-        #     sys.exit(0)
+        if not missing_periods:
+            print("\n✓ All dates in the new data have already been processed!")
+            print("No new data to process. Exiting pipeline.")
+            sys.exit(0)
         
 
 
@@ -249,29 +250,29 @@ def run_muac_pipelines():
         print(f"❌ Pipeline failed: {e}", file=sys.stderr)
         sys.exit(1)
     
-    # # Step 3: Run geospatial processing
-    # geo_vars_cmd = [
-    #     sys.executable, 
-    #     GEO_SCRIPT,
-    #     "--start_date", start_date.strftime('%Y-%m-%d'),
-    #     "--end_date", end_date.strftime('%Y-%m-%d'),
-    #     "--pickle_file", pickle_file,
-    #     "--polygon_id", "Ward",
-    #     "--pop_years", "2015,2020",
-    #     # "--api_key_acled", "sdsadsa-B4hNU7",
-    #     "--acled_password", "Omufofoyo83", #change with relevant acled password
-    #     "--acled_email", "nelson.mutanda@ndma.go.ke",
-    #     "--country", "Kenya"
+    # Step 3: Run geospatial processing
+    geo_vars_cmd = [
+        sys.executable, 
+        GEO_SCRIPT,
+        "--start_date", start_date.strftime('%Y-%m-%d'),
+        "--end_date", end_date.strftime('%Y-%m-%d'),
+        "--pickle_file", pickle_file,
+        "--polygon_id", "Ward",
+        "--pop_years", "2015,2020",
+        # "--api_key_acled", "sdsadsa-B4hNU7",
+        "--acled_password", "Omufofoyo83", #change with relevant acled password
+        "--acled_email", "nelson.mutanda@ndma.go.ke",
+        "--country", "Kenya"
 
-    # ]
+    ]
 
-    # print("\n[3/4] Starting geospatial variable generation...")
-    # try:
-    #     subprocess.run(geo_vars_cmd, check=True)
-    #     print("✓ Geospatial processing completed successfully")
-    # except subprocess.CalledProcessError as e:
-    #     print(f"❌ Geospatial processing failed: {e}", file=sys.stderr)
-    #     sys.exit(1)
+    print("\n[3/4] Starting geospatial variable generation...")
+    try:
+        subprocess.run(geo_vars_cmd, check=True)
+        print("✓ Geospatial processing completed successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Geospatial processing failed: {e}", file=sys.stderr)
+        sys.exit(1)
     
     # Step 4: Run final dataset generation
     print("\n[4/4] Starting final dataset generation...")
@@ -344,6 +345,29 @@ def unzip_intermediary_datasets():
         zip_ref.extractall(extract_to)
 
     print(f"✓ Extracted '{zip_path}' to '{extract_to}'")
+    return True
+
+def zip_intermediary_datasets():
+    """
+    Zip the 'intermediary_datasets' folder into 'new_intermediary_datasets.zip'
+    in the Kenya_MUAC_NDMA_implementation folder.
+    """
+    source_dir = os.path.join(BASE_DIR, "intermediary_datasets")
+    output_zip = os.path.join(BASE_DIR, "new_intermediary_datasets.zip")
+
+    if not os.path.isdir(source_dir):
+        print(f"❌ Folder not found: {source_dir}")
+        return False
+
+    with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(source_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                # Preserve internal structure: intermediary_datasets/...
+                arcname = os.path.relpath(file_path, BASE_DIR)
+                zipf.write(file_path, arcname)
+
+    print(f"✓ Zipped '{source_dir}' to '{output_zip}'")
     return True
 
 

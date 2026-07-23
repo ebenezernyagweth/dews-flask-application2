@@ -2,6 +2,9 @@ FROM condaforge/mambaforge:latest
 
 WORKDIR /app
 
+# Install system tools for port management
+RUN apt-get update && apt-get install -y lsof psmisc procps vim nano && rm -rf /var/lib/apt/lists/*
+
 # Copy and install from your exact working environment
 COPY environment.yml .
 RUN mamba env update -n base -f environment.yml

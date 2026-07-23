@@ -21,10 +21,10 @@ wards_gdf.to_file("data/Kenya_wards_with_counties.geojson", driver="GeoJSON")
 import os, glob
 import pandas as pd
 
-# Dynamic path construction
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PARENT_DIR = os.path.dirname(SCRIPT_DIR)
 base_dir = os.path.join(PARENT_DIR, "Kenya_MUAC_NDMA_implementation", "results")
+
 
 def load_latest_prediction_file(horizon: int, target: str):
     """
@@ -98,27 +98,29 @@ risk_1mo = risk_1mo.merge(county_ward[['Ward', 'County']], on='Ward', how='left'
 risk_2mo = risk_2mo.merge(county_ward[['Ward', 'County']], on='Ward', how='left')
 risk_3mo = risk_3mo.merge(county_ward[['Ward', 'County']], on='Ward', how='left')
 
-# Write outputs 
-df_1mo.to_csv("data/Smoothed_wasting_prediction_hb_1.csv", index=False)
-df_2mo.to_csv("data/Smoothed_wasting_prediction_hb_2.csv", index=False)
-df_3mo.to_csv("data/Smoothed_wasting_prediction_hb_3.csv", index=False)
+# Write outputs
+DATA_DIR = Path(os.path.join(PARENT_DIR, "early_warning_dashboard-main", "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-risk_1mo.to_csv("data/Smoothed_wasting_risk_prediction_hb_1.csv", index=False)
-risk_2mo.to_csv("data/Smoothed_wasting_risk_prediction_hb_2.csv", index=False)
-risk_3mo.to_csv("data/Smoothed_wasting_risk_prediction_hb_3.csv", index=False)
+df_1mo.to_csv(DATA_DIR / "Smoothed_wasting_prediction_hb_1.csv", index=False)
+df_2mo.to_csv(DATA_DIR / "Smoothed_wasting_prediction_hb_2.csv", index=False)
+df_3mo.to_csv(DATA_DIR / "Smoothed_wasting_prediction_hb_3.csv", index=False)
+
+risk_1mo.to_csv(DATA_DIR / "Smoothed_wasting_risk_prediction_hb_1.csv", index=False)
+risk_2mo.to_csv(DATA_DIR / "Smoothed_wasting_risk_prediction_hb_2.csv", index=False)
+risk_3mo.to_csv(DATA_DIR / "Smoothed_wasting_risk_prediction_hb_3.csv", index=False)
 
 
-# Add figures to main folder 
+# Add figures to main folder
 
 import os, re, glob, shutil
 from pathlib import Path
 from datetime import datetime
 
-# === Directories with dynamic paths ===
+# === Directories ===
 FIG_DIR = Path(os.path.join(PARENT_DIR, "Kenya_MUAC_NDMA_implementation", "figures"))
 COV_DIR = Path(os.path.join(PARENT_DIR, "Kenya_MUAC_NDMA_implementation", "covariates_graphs"))
 ASSETS_DIR = Path(os.path.join(PARENT_DIR, "early_warning_dashboard-main", "assets", "figures"))
-
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Choose "newest" (for 2025-11) or "oldest"
@@ -167,20 +169,16 @@ def copy_one(outcome: str, pattern: str):
 
 def copy_covariate_graphs():
     copied = []
-
     for label, pattern in COVARIATE_PATTERNS.items():
         matches = sorted(COV_DIR.glob(pattern))
-
         if matches:
-            src = matches[-1]  # take the newest (alphabetically works because years increase)
+            src = matches[-1]  # newest alphabetically
             dest = ASSETS_DIR / src.name
             shutil.copy2(src, dest)
-
             copied.append(dest)
             print(f"[covariate] Copied latest {label}: {src} -> {dest}")
         else:
             print(f"[covariate] No file found for pattern: {pattern}")
-
     return copied
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def extract_latest_MUAC():
         FROM data_collection_exercise
         WHERE ExerciseDescription LIKE 'HHA%'
         ORDER BY ExerciseStartDate DESC
-        LIMIT 1 OFFSET 2
+        LIMIT 1 OFFSET 1
     """
 
     # Execute the query to fetch the ExerciseDescription

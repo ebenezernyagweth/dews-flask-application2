@@ -1055,7 +1055,7 @@ def pick_covar_files():
 
     return {
         "evi":      find_one(["evi"]),
-        "prec":     find_one(["prec", "rain", "chirps"]),
+        "prec":     find_one(["spi", "prec", "rain", "chirps"]),
         "conflict": find_one(["conflict", "acled"]),
     }
 

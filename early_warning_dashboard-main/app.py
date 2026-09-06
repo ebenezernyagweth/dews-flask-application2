@@ -1960,29 +1960,21 @@ def load_predictor_plots(_):
 
     # Text (two paragraphs each). You can keep using implicit concatenation for readability.
     prec_paras = [
-        ("For each month, this plot shows the precipitation z-score relative to a 20-year baseline for the same "
-         "calendar month. The z-score is the number of standard deviations that month’s total accumulated rainfall "
-         "differs from its long-term normal value. Negative values mean unusually dry conditions (possible drought "
+        ("For each month, this plot shows the SPI relative to a 17-year baseline for the same "
+         "calendar month. Negative values mean unusually dry conditions (possible drought "
          "signal); positive values mean wetter-than-normal conditions. Months with anomalies are indicated with a "
          "shaded background. Long and short rain seasons are also indicated for better tracking of conditions during "
-         "those months."),
-        ("The number of wasted children in the sample is also overlaid on the graph. The graph shows a spike in the "
-         "number of wasted children after nearly two consecutive years of drought culminating in 2023, which—as of "
-         "2025—has not yet reverted to previous values.")
+         "those months.The number of wasted children in the sample is also overlaid on the graph.")
     ]
     evi_paras = [
         ("EVI tracks vegetation greenness and biomass. For each month, the average EVI z-score relative"
         " to a medium-term 5-year baseline is shown. The z-score shows how the vegetation greenness in that month "
         "compares to its medium-term normal value. Negative values indicate abnormally low EVI signal"
-        " for that month. Persistent declines can therefore indicate reduced forage/crop."),
-        ("The number of wasted children in the sample is also overlaid on the graph. The graph shows a spike in the "
-         "number of wasted children after two consecutive years of lower than average EVI during both the long and shortrain seasons"
-          "which—as of 2025—has not yet reverted to previous values.")
+        " for that month. Persistent declines can therefore indicate reduced forage/crop.The number of wasted children in the sample is also overlaid on the graph.")
     ]
     conflict_paras = [
         ("This series counts reported violent conflict events. As an imperfect measure of conflict intensity"
          "the number of total fatalities are also shown."),
-        ("The graph indicates a steady increase in the total number of conflicts over time.")
     ]
 
     # Build figure/text split blocks

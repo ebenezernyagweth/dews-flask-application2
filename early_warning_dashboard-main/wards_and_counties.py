@@ -134,7 +134,7 @@ PATTERNS = {
 
 # === Covariate plots to always copy ===
 COVARIATE_PATTERNS = {
-    "precip": "precip_zscore_vs_wasting_*.png",
+    "precip": "spi1_vs_wasting_*.png",
     "evi_ndvi": "evi_ndvi_zscore_vs_wasting_*.png",
     "conflict": "conflict_fatalities_trends*.png"
 }

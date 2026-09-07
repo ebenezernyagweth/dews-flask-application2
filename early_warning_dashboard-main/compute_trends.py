@@ -140,8 +140,10 @@ def run_trend_pipeline_for_target(
            .sort_values(["Ward", "time_period"])
     )
 
-    # Keep rows where observed + 3mo horizon exist (alerts depend on 3mo)
-    merged = merged.dropna(subset=["observed", "pred_3mo", "lower_bound_3mo", "upper_bound_3mo"])
+    # Keep rows where observed exist (alerts depend on 3mo but they are controlled later on)
+    #merged = merged.dropna(subset=["observed", "pred_3mo", "lower_bound_3mo", "upper_bound_3mo"])
+    merged = merged.dropna(subset=["observed"])
+
 
     # ===== Trends (existing) =====
     merged["trend_1mo"] = (merged.get("pred_1mo") - merged["observed"]).apply(classify) if "pred_1mo" in merged else "No Data"

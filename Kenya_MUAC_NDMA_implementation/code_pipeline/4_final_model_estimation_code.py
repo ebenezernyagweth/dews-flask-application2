@@ -288,25 +288,17 @@ def merge_and_replace_predictions(
         observed_df = pd.read_csv(observed_file)
 
     # --- Prepare last observed date & map ---
-    last_obs_date = None
-    obs_last_map = None
+    raw_col = "wasting" if outcome_var.startswith("wasting_smoothed") else "wasting_risk"
+    obs_full, last_obs_date, obs_last_map = None, None, None
     if observed_df is not None:
-        if ward_col not in observed_df.columns:
-            raise ValueError(f"'{ward_col}' missing in observed data.")
-        if date_col not in observed_df.columns:
-            raise ValueError(f"'{date_col}' missing in observed data.")
-        if outcome_var not in observed_df.columns:
-            raise ValueError(f"'{outcome_var}' missing in observed data.")
-
-        obs_tmp = observed_df[[ward_col, date_col, outcome_var]].copy()
-        obs_tmp[date_col] = pd.to_datetime(obs_tmp[date_col], errors="coerce")
-        obs_tmp = obs_tmp.dropna(subset=[date_col])
-        
-        if not obs_tmp.empty and obs_tmp[outcome_var].notna().any():
-            last_obs_date = obs_tmp.loc[obs_tmp[outcome_var].notna(), date_col].max()
-            if pd.notna(last_obs_date):
-                obs_last = obs_tmp.loc[obs_tmp[date_col] == last_obs_date, [ward_col, outcome_var]].copy()
-                obs_last_map = dict(zip(obs_last[ward_col], obs_last[outcome_var]))
+        keep = [ward_col, date_col, outcome_var, raw_col] + \
+               (["is_gap_row"] if "is_gap_row" in observed_df.columns else [])
+        obs_full = observed_df[keep].copy()
+        obs_full[date_col] = pd.to_datetime(obs_full[date_col], errors="coerce")
+        last_obs_date = obs_full.loc[obs_full[raw_col].notna(), date_col].max()   # RAW, not smoothed
+        obs_full = obs_full[obs_full[date_col] <= last_obs_date].drop(columns=raw_col)
+        obs_last = obs_full[obs_full[date_col] == last_obs_date]
+        obs_last_map = dict(zip(obs_last[ward_col], obs_last[outcome_var]))
 
     for h in horizons:
         future_file = os.path.join(results_dir, f"{outcome_var}_pred_{model}_{h}_future_months.csv")
@@ -437,6 +429,10 @@ def merge_and_replace_predictions(
                   f"h={h}, kept the later forecast")
 
         df_merged = df_merged.drop(columns="_src").reset_index(drop=True)
+
+        if obs_full is not None:
+            df_merged = (df_merged.drop(columns=[outcome_var, "is_gap_row"], errors="ignore")
+                                  .merge(obs_full, on=[ward_col, date_col], how="left"))
 
         min_date = df_merged["time_period"].min()
         max_date = df_merged["time_period"].max()

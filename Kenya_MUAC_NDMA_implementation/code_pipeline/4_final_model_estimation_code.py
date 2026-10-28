@@ -223,6 +223,64 @@ if DROP_SMOOTHED_LAGS:
         print(f"  {_name}: {_before} -> {len(globals()[_name])} features "
               f"(smoothed outcome lags dropped)")
 
+# --- Horizon-safe change features ---------------------------------------------
+# Script 3 builds X_delta_lag_d = X.diff(d).shift(1): "d" is the length of the
+# change, and every one of them ENDS AT t-1. The l2/l3 lists picked them up as
+# if they were 2-3 months old, so at h=2 and h=3 they contained month t-1:
+# known in training and backtest (a leak - with X_lag_h the model can rebuild
+# X at t-1), all-NaN in the live forecast rows.
+#
+# Rebuilt here from the lag columns, ending at the forecast origin t-h:
+#     X_delta{d}_lag_{h} = X_lag_h - X_lag_{h+d}      d = 1, 2, 3
+# h=1: identical values to script 3's X_delta_lag_d (only the names change).
+# h=2, h=3: the same 1/2/3-month changes, now known at forecast time.
+# Bases: wasting, wasting_risk and the 8 land-cover shares (whatever script 3
+# built deltas for). The 6-month deltas were never in a feature list.
+HORIZON_SAFE_DELTAS = True
+DELTA_MONTHS = (1, 2, 3)
+
+if HORIZON_SAFE_DELTAS:
+    _delta_re = re.compile(r"^(?P<base>.+)_delta_lag_(?P<d>\d+)$")
+    _delta_bases = sorted({_delta_re.match(c)["base"] for c in data.columns
+                           if _delta_re.match(c) and not c.startswith("delta_")})
+    _built = {}
+    for _h in (1, 2, 3):
+        for _b in _delta_bases:
+            for _d in DELTA_MONTHS:
+                _a, _z = f"{_b}_lag_{_h}", f"{_b}_lag_{_h + _d}"
+                if _a not in data.columns or _z not in data.columns:
+                    raise KeyError(f"horizon-safe delta needs {_a} and {_z} (script 3 lags)")
+                _built[f"{_b}_delta{_d}_lag_{_h}"] = data[_a] - data[_z]
+    data = pd.concat([data.drop(columns=list(_built), errors="ignore"),
+                      pd.DataFrame(_built, index=data.index)], axis=1)
+
+    for _h in (1, 2, 3):
+        _name = f"hb_m{_h}"
+        _old = list(globals()[_name])
+        _new_cols = [f"{_b}_delta{_d}_lag_{_h}" for _b in _delta_bases for _d in DELTA_MONTHS]
+        # Replace each old X_delta_lag_d in place by X_delta{d}_lag_{h} (for h=1
+        # this is a pure rename, so column order - and the fit - is unchanged);
+        # changes the list did not have yet (d=1 at h=2; d=1,2 at h=3) go at the end.
+        _swap = {f"{_b}_delta_lag_{_d}": f"{_b}_delta{_d}_lag_{_h}"
+                 for _b in _delta_bases for _d in DELTA_MONTHS}
+        _lst = [_swap.get(c, c) for c in _old]
+        _lst = [c for c in _lst if not _delta_re.match(c)]      # any other t-1 delta
+        _lst += [c for c in _new_cols if c not in _lst]
+        globals()[_name] = _lst
+        print(f"  {_name}: change features rebuilt ending at lag {_h} "
+              f"({sum(1 for c in _old if _delta_re.match(c))} -> {len(_new_cols)}), "
+              f"{len(globals()[_name])} features")
+
+    # h=1 must be unchanged in value: check against script 3's columns
+    for _b in _delta_bases:
+        for _d in DELTA_MONTHS:
+            _o, _n = f"{_b}_delta_lag_{_d}", f"{_b}_delta{_d}_lag_1"
+            if _o in data.columns:
+                _diff = (data[_o] - data[_n]).abs().max()
+                if pd.notna(_diff) and _diff > 1e-9:
+                    raise ValueError(f"{_n} differs from script 3's {_o} by {_diff:.3g}: "
+                                     f"panel is not one row per ward-month?")
+
 #------------------------------
 
 
@@ -526,6 +584,20 @@ for outcome_var in outcomes:
                 )
             print(f"{feat_list_name}: {len(feat_list)} features")
 
+            # Guard: no feature may use a month after the forecast origin.
+            # A feature "<x>_lag_k" is k months before the TARGET month; the origin is
+            # `horizon` months before the target, so k >= horizon is required.
+            # Script 3's old change features (<x>_delta_lag_d) end at t-1 whatever the
+            # horizon, so they are flagged at h >= 2 (and replaced by the horizon-safe
+            # <x>_delta{d}_lag_{h} above).
+            _post = [c for c in feat_list
+                     if (re.search(r"_lag_(\d+)$", c) and int(re.search(r"_lag_(\d+)$", c).group(1)) < horizon)
+                     or (re.search(r"_delta_lag_\d+$", c) and not c.startswith("delta_") and horizon > 1)]
+            if _post:
+                raise ValueError(f"{outcome_var} h={horizon}: {len(_post)} features use months after the "
+                                 f"forecast date (would leak in backtests, be empty in live forecasts): {_post[:8]}")
+
+
             # Anchor on the RAW MUAC column, not the smoothed target. The
             # NaN-aware smoother fills a value for any row with observed months
             # in its window, including the future rows created by
@@ -581,6 +653,21 @@ for outcome_var in outcomes:
                 "time_period": predict["time_period"].iloc[0]
             })
             fi.to_csv(fi_path, mode="a", header=False, index=False)
+
+            # Guard: a feature that is entirely missing in the forecast rows
+            # gets its contribution from XGBoost's default branch, not from the
+            # ward's data - the static-covariate bug in the future rows did
+            # exactly this. Flag it loudly.
+            _all_nan = [c for c in testX.columns if testX[c].isna().all()]
+            _most_nan = [c for c in testX.columns if c not in _all_nan and testX[c].isna().mean() > 0.5]
+            if _most_nan:
+                print(f"[!] {outcome_var} h={horizon}: {len(_most_nan)} features missing in more than half "
+                      f"of the forecast rows (missing report at the forecast date?): {_most_nan[:8]}")
+            if _all_nan:
+                print(f"[!] {outcome_var} h={horizon}: {len(_all_nan)} features are all-NaN "
+                      f"in the forecast rows, their contribution is not data-driven: "
+                      f"{_all_nan[:8]}{' ...' if len(_all_nan) > 8 else ''}")
+
 
             # 5) Prediction + bootstrap CIs
             yhat = model.predict(testX)
@@ -737,8 +824,11 @@ def pretty_feature(name: str) -> str:
         n_wo_lag = n
 
     # --- detect delta on the lagless name ---
-    is_delta = n_wo_lag.endswith("_delta")
-    base_key = n_wo_lag[:-6] if is_delta else n_wo_lag  # strip "_delta" if present
+    # "_delta" (script 3) or "_delta{d}" (horizon-safe d-month change)
+    md = re.search(r"_delta(\d*)$", n_wo_lag)
+    is_delta = md is not None
+    delta_months = int(md.group(1)) if (md and md.group(1)) else None
+    base_key = n_wo_lag[:md.start()] if is_delta else n_wo_lag
 
     # window + radius extraction (work on base_key)
     window_12m = "_12m_" in base_key
@@ -778,7 +868,10 @@ def pretty_feature(name: str) -> str:
             base_label = f"{base_label} change"
 
     # --- suffix for lag/window/radius (no generic Δ anymore) ---
-    return base_label + _fmt_suffix(lag=lag, window_12m=window_12m, radius_km=radius_km)
+    suffix = _fmt_suffix(lag=lag, window_12m=window_12m, radius_km=radius_km)
+    if delta_months:
+        suffix = (f" (over {delta_months} mo, " + suffix[2:]) if suffix else f" (over {delta_months} mo)"
+    return base_label + suffix
 
 
 # =========================
@@ -849,6 +942,7 @@ def pretty_feature_minimal(name: str) -> str:
 def pooled_label_from_row(row) -> str:
     raw = row.get("feature", row.get("feature_renamed", ""))
     base = re.sub(r"_lag_\d+$", "", str(raw)).strip()
+    base = re.sub(r"_delta\d+$", "_delta", base)   # pool 1/2/3-month changes, as before
 
     if is_wasting_risk_base(base):
         return "Wasting risk (time-series signal)"

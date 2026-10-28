@@ -566,6 +566,15 @@ class WastingPrevalenceDatasetBuilder:
         del d, grid, spans
         gc.collect()
 
+    def _register_static_cols(self, static_df):
+        """
+        Record the ward-level (time-invariant) columns a static merge added, so
+        extend_future_muac_periods can carry them onto the future rows. Names
+        come from the input file itself, not a hardcoded list.
+        """
+        new_cols = [c for c in static_df.columns if c != self.polygon_id_col]
+        self.static_cols = list(dict.fromkeys(getattr(self, "static_cols", []) + new_cols))
+
     def merge_travel_time(self, generate_plot=True, save_plot=True, plot=False, 
                           output_dir="covariates_graphs", accessiblity_file_name="accessibility_to_cities_2015.csv"):
         """
@@ -575,6 +584,7 @@ class WastingPrevalenceDatasetBuilder:
         travel_time = pd.read_csv(os.path.join(self.input_path, accessiblity_file_name))
         self.merged_data = pd.merge(self.muac_data_filtered, travel_time, 
                                     on=self.polygon_id_col, how='left')
+        self._register_static_cols(travel_time)
         del travel_time
         gc.collect()
 
@@ -624,6 +634,7 @@ class WastingPrevalenceDatasetBuilder:
         pop_den = pd.read_csv(os.path.join(self.input_path, population_file_name))
         self.merged_data = pd.merge(self.merged_data, pop_den, 
                                     on=self.polygon_id_col, how='left')
+        self._register_static_cols(pop_den)
         del pop_den
         gc.collect()
 
@@ -1978,15 +1989,40 @@ class WastingPrevalenceDatasetBuilder:
         future_df = future_df.merge(existing, on=[self.polygon_id_col, 'date'], how='left', indicator=True)
         future_df = future_df[future_df['_merge'] == 'left_only'].drop(columns=['_merge'])
 
+        # Recover ward-level attributes that do not change over time: admin
+        # metadata AND the static covariates (travel time, population density).
+        #
+        # Previously only the metadata was carried, so the static covariates
+        # were NaN on EVERY future row - i.e. on every forecast. XGBoost sent
+        # those rows down its missing-value branch: forecasts moved by up to
+        # 2.3 pp (wasting) / 6.5 pp (risk), and SHAP showed "Population &
+        # access" raising the forecast in all wards.
+        #
+        # first() takes each ward's first non-null value PER COLUMN. The old
+        # dropna(subset=metadata_cols) dropped a ward entirely if any one of
+        # its three metadata fields was missing.
         metadata_cols = ['County', 'SubCounty', 'LivelihoodZone']
+        static_cols = getattr(self, "static_cols", [])
+        if not static_cols:
+            print("[!] no static covariates registered - run merge_travel_time / "
+                  "merge_population_density before extend_future_muac_periods")
+        carry_cols = [c for c in metadata_cols + static_cols
+                      if c in self.merged_data.columns]
 
-        ward_metadata = (
-            self.merged_data
-            .dropna(subset=metadata_cols)
-            .drop_duplicates(subset=[self.polygon_id_col])[[self.polygon_id_col] + metadata_cols]
-        )
+        ward_attrs = (self.merged_data
+                      .groupby(self.polygon_id_col)[carry_cols]
+                      .first()
+                      .reset_index())
+        future_df = future_df.merge(ward_attrs, on=self.polygon_id_col, how='left')
 
-        future_df = future_df.merge(ward_metadata, on=self.polygon_id_col, how='left')
+        # Check: a static value may be missing on a future row only if the
+        # ward has no value for it in the observed data either.
+        for c in [c for c in static_cols if c in future_df.columns]:
+            n_nan = int(future_df[c].isna().sum())
+            if n_nan:
+                n_w = future_df.loc[future_df[c].isna(), self.polygon_id_col].nunique()
+                print(f"[!] {c}: {n_nan} future rows NaN ({n_w} wards with no observed value)")
+        print(f"Carried onto future rows: {carry_cols}")
 
         self.merged_data = pd.concat([self.merged_data, future_df], ignore_index=True)
         print(f"Added {len(future_df)} future rows.")

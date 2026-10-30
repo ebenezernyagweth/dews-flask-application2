@@ -1310,211 +1310,211 @@ class SecondaryVariableGenerator:
 #--------------- CONFLICT (ACLED) --------------------#
 #============================================================
     def run_conflict_pipeline(self, acled_email, acled_password, country):
-            """
-            ACLED OAuth download + centroid-weighted monthly/12m sums.
-            Fixes:
-            - correct month grid merge (padded grid -> rolling -> clip to window)
-            - no SettingWithCopy (use .copy(), points_from_xy)
-            - robust meters CRS (auto UTM or 3857 fallback)
-            """
-    
-            # ------------ 1) Date window ------------
-            start_date_evi = pd.to_datetime(self.start_date_evi)
-            end_date_evi   = pd.to_datetime(self.end_date_evi)
-            start_date_acled = (start_date_evi - pd.DateOffset(months=12)).date()
-            end_date_acled   = end_date_evi.date()
-            print(f"Fetching ACLED data for {country} from {start_date_acled} to {end_date_acled} (includes 12 months of history).")
-    
-            # ------------ 2) OAuth token ------------
-            token_resp = requests.post(
-                "https://acleddata.com/oauth/token",
-                data={
-                    "username": acled_email,
-                    "password": acled_password,
-                    "grant_type": "password",
-                    "client_id": "acled",
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=60,
-            )
-            token_resp.raise_for_status()
-            access_token = token_resp.json()["access_token"]
-    
-            # ------------ 3) Download (cursor-paginated) ------------
-            # ACLED deprecated `page` on 2026-10-27; use `cursor` / `next_cursor` instead.
-            base_url = "https://acleddata.com/api/acled/read"
-            headers = {"Authorization": f"Bearer {access_token}"}
-            params_base = {
-                "country": country,
-                "event_date": f"{start_date_acled}|{end_date_acled}",
-                "event_date_where": "BETWEEN",
-                "fields": "|".join([
-                    "event_id_cnty","event_date","year","event_type","sub_event_type",
-                    "actor1","actor2","country","admin1","admin2","admin3","location",
-                    "latitude","longitude","fatalities","notes","timestamp"
-                ]),
-                "inter_num": 1,
-                "limit": 5000,
-            }
-            frames = []
-            cursor = 0
-            while cursor is not None:
-                resp = requests.get(base_url, params={**params_base, "cursor": cursor},
-                                    headers=headers, timeout=120)
-                if resp.status_code == 401 or "Access denied" in resp.text:
-                    raise RuntimeError(f"ACLED auth failed ({resp.status_code}): {resp.text[:200]}")
-                if not resp.ok:
-                    raise RuntimeError(f"ACLED request failed ({resp.status_code}): {resp.text[:300]}")
-                js = resp.json()
-                data = js.get("data", [])
-                if data:
-                    frames.append(pd.DataFrame(data))
-                cursor = js.get("next_cursor")
-    
-            if not frames:
-                print("No ACLED events returned for the requested range.")
-            print(f"ACLED rows downloaded: {sum(len(f) for f in frames)}")
-    
-            # ------------ 4) Combine & clean ------------
-            if frames:
-                conflict_data = pd.concat(frames, ignore_index=True)
-            else:
-                conflict_data = pd.DataFrame(columns=[
-                    "event_id_cnty","event_date","year","event_type","latitude","longitude","fatalities"
-                ])
-    
-            # types
-            conflict_data["event_date"] = pd.to_datetime(conflict_data.get("event_date"), errors="coerce")
-            for col in ("latitude","longitude","fatalities"):
-                if col in conflict_data.columns:
-                    conflict_data[col] = pd.to_numeric(conflict_data[col], errors="coerce")
-            conflict_data["fatalities"] = conflict_data["fatalities"].fillna(0).astype(int)
-    
-            # drop rows w/o essential fields
-            conflict_data = conflict_data.dropna(subset=["event_date","latitude","longitude"]).copy()
-    
-            # ------------ 5) Month grid (PADDED) ------------
-            # pad 11 months before start so first analysis month has full rolling history
-            grid_start = (start_date_evi - pd.DateOffset(months=11)).to_period("M").to_timestamp()
-            date_df = pd.date_range(start=grid_start, end=end_date_evi, freq="MS").to_frame(index=False, name="date")
-            date_df["year"]  = date_df["date"].dt.year.astype(int)
-            date_df["month"] = date_df["date"].dt.month.astype(int)
-    
-            # ------------ 6) Prep conflict_data for aggregation (your logic) ------------
-            # derive year/month, violent filter, per-(lat,lon,year,month) tallies
-            conflict_data["year"]  = conflict_data["event_date"].dt.year
-            conflict_data["month"] = conflict_data["event_date"].dt.month
-    
-            violent_conflict_types = ["Battles","Explosions/Remote violence","Violence against civilians","Riots"]
-            conflict_data = conflict_data[conflict_data["event_type"].isin(violent_conflict_types)].copy()
-            self.conflict_data = conflict_data  # keep as you had
-    
-            # counts per point-month
-            conflict_data["conflict_total_num"] = conflict_data.groupby(
-                ["latitude","longitude","year","month"]
-            )["event_id_cnty"].transform("count")
-            conflict_data["conflict_fatalities_num"] = conflict_data.groupby(
-                ["latitude","longitude","year","month"]
-            )["fatalities"].transform("sum")
-            conflict_data = conflict_data.drop_duplicates(subset=["latitude","longitude","year","month"]).copy()
-    
-            # geometry (no SettingWithCopy)
-            conflict_gdf = gpd.GeoDataFrame(
-                conflict_data,
-                geometry=gpd.points_from_xy(conflict_data["longitude"], conflict_data["latitude"]),
-                crs="EPSG:4326"
-            )
-    
-            # ------------ 7) Projection to meters (shared CRS) ------------
-            _target = (self.polygons.estimate_utm_crs()
-                    if hasattr(self.polygons, "estimate_utm_crs") else "EPSG:3857")
-            wards_proj   = self.polygons.to_crs(_target)
-            events_proj  = conflict_gdf.to_crs(_target)
-    
-            # quick sanity
-            c = wards_proj.geometry.iloc[0].centroid
-            d = events_proj.geometry.distance(c)
-            print("events within 500 km:", int((d <= 500000).sum()),
-                "| within 100 km:", int((d <= 100000).sum()))
-    
-            
-            distance_cutoffs = [500000, 100000]  # meters
-    
-            for distance_cutoff in distance_cutoffs:
-                results = []
-    
-                for _, ward in wards_proj.iterrows():
-                    centroid = ward.geometry.centroid
-    
-                    # distances to THIS ward centroid (vectorized)
-                    distances = events_proj.geometry.distance(centroid)
-    
-                    # pick events within cutoff
-                    mask = distances <= distance_cutoff
-                    if not mask.any():
-                        monthly_totals = date_df.copy()
-                        monthly_totals[["monthly_conflicts_dis_w","monthly_fatalities_dis_w"]] = 0.0
-                    else:
-                        sub = events_proj.loc[mask, ["year","month","conflict_total_num","conflict_fatalities_num"]].copy()
-                        sub["year"]  = sub["year"].astype(int)
-                        sub["month"] = sub["month"].astype(int)
-                        sub["conflict_total_num"]      = pd.to_numeric(sub["conflict_total_num"], errors="coerce").fillna(0.0)
-                        sub["conflict_fatalities_num"] = pd.to_numeric(sub["conflict_fatalities_num"], errors="coerce").fillna(0.0)
-    
-                        # safe log weight (aligned to mask)
-                        denom = np.log(distances.loc[mask] + 1.0)
-                        denom = denom.where(denom > 0, 1e-6).to_numpy()
-    
-                        sub["conflict_total_num_w"]      = sub["conflict_total_num"].to_numpy()      / denom
-                        sub["conflict_fatalities_num_w"] = sub["conflict_fatalities_num"].to_numpy() / denom
-    
-                        # monthly sums from events
-                        monthly_totals = (sub.groupby(["year","month"])
-                                            .agg(monthly_conflicts_dis_w=("conflict_total_num_w","sum"),
-                                                monthly_fatalities_dis_w=("conflict_fatalities_num_w","sum"))
-                                            .reset_index())
-    
-                        
-                        monthly_totals["year"]  = monthly_totals["year"].astype(int)
-                        monthly_totals["month"] = monthly_totals["month"].astype(int)
-                        monthly_totals = date_df.merge(monthly_totals, on=["year","month"], how="left")
-                        monthly_totals[["monthly_conflicts_dis_w","monthly_fatalities_dis_w"]] = (
-                            monthly_totals[["monthly_conflicts_dis_w","monthly_fatalities_dis_w"]].fillna(0.0)
-                        )
-    
-                    # rolling over the full padded window
-                    monthly_totals = monthly_totals.sort_values("date").reset_index(drop=True)
-                    monthly_totals["conflict_previous_12m"] = (
-                        monthly_totals["monthly_conflicts_dis_w"].rolling(12, min_periods=1).sum()
+        """
+        ACLED OAuth download + centroid-weighted monthly/12m sums.
+        Fixes:
+        - correct month grid merge (padded grid -> rolling -> clip to window)
+        - no SettingWithCopy (use .copy(), points_from_xy)
+        - robust meters CRS (auto UTM or 3857 fallback)
+        """
+
+        # ------------ 1) Date window ------------
+        start_date_evi = pd.to_datetime(self.start_date_evi)
+        end_date_evi   = pd.to_datetime(self.end_date_evi)
+        start_date_acled = (start_date_evi - pd.DateOffset(months=12)).date()
+        end_date_acled   = end_date_evi.date()
+        print(f"Fetching ACLED data for {country} from {start_date_acled} to {end_date_acled} (includes 12 months of history).")
+
+        # ------------ 2) OAuth token ------------
+        token_resp = requests.post(
+            "https://acleddata.com/oauth/token",
+            data={
+                "username": acled_email,
+                "password": acled_password,
+                "grant_type": "password",
+                "client_id": "acled",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=60,
+        )
+        token_resp.raise_for_status()
+        access_token = token_resp.json()["access_token"]
+
+        # ------------ 3) Download (cursor-paginated) ------------
+        # ACLED deprecated `page` on 2026-10-27; use `cursor` / `next_cursor` instead.
+        base_url = "https://acleddata.com/api/acled/read"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        params_base = {
+            "country": country,
+            "event_date": f"{start_date_acled}|{end_date_acled}",
+            "event_date_where": "BETWEEN",
+            "fields": "|".join([
+                "event_id_cnty","event_date","year","event_type","sub_event_type",
+                "actor1","actor2","country","admin1","admin2","admin3","location",
+                "latitude","longitude","fatalities","notes","timestamp"
+            ]),
+            "inter_num": 1,
+            "limit": 5000,
+        }
+        frames = []
+        cursor = 0
+        while cursor is not None:
+            resp = requests.get(base_url, params={**params_base, "cursor": cursor},
+                                headers=headers, timeout=120)
+            if resp.status_code == 401 or "Access denied" in resp.text:
+                raise RuntimeError(f"ACLED auth failed ({resp.status_code}): {resp.text[:200]}")
+            if not resp.ok:
+                raise RuntimeError(f"ACLED request failed ({resp.status_code}): {resp.text[:300]}")
+            js = resp.json()
+            data = js.get("data", [])
+            if data:
+                frames.append(pd.DataFrame(data))
+            cursor = js.get("next_cursor")
+
+        if not frames:
+            print("No ACLED events returned for the requested range.")
+        print(f"ACLED rows downloaded: {sum(len(f) for f in frames)}")
+
+        # ------------ 4) Combine & clean ------------
+        if frames:
+            conflict_data = pd.concat(frames, ignore_index=True)
+        else:
+            conflict_data = pd.DataFrame(columns=[
+                "event_id_cnty","event_date","year","event_type","latitude","longitude","fatalities"
+            ])
+
+        # types
+        conflict_data["event_date"] = pd.to_datetime(conflict_data.get("event_date"), errors="coerce")
+        for col in ("latitude","longitude","fatalities"):
+            if col in conflict_data.columns:
+                conflict_data[col] = pd.to_numeric(conflict_data[col], errors="coerce")
+        conflict_data["fatalities"] = conflict_data["fatalities"].fillna(0).astype(int)
+
+        # drop rows w/o essential fields
+        conflict_data = conflict_data.dropna(subset=["event_date","latitude","longitude"]).copy()
+
+        # ------------ 5) Month grid (PADDED) ------------
+        # pad 11 months before start so first analysis month has full rolling history
+        grid_start = (start_date_evi - pd.DateOffset(months=11)).to_period("M").to_timestamp()
+        date_df = pd.date_range(start=grid_start, end=end_date_evi, freq="MS").to_frame(index=False, name="date")
+        date_df["year"]  = date_df["date"].dt.year.astype(int)
+        date_df["month"] = date_df["date"].dt.month.astype(int)
+
+        # ------------ 6) Prep conflict_data for aggregation (your logic) ------------
+        # derive year/month, violent filter, per-(lat,lon,year,month) tallies
+        conflict_data["year"]  = conflict_data["event_date"].dt.year
+        conflict_data["month"] = conflict_data["event_date"].dt.month
+
+        violent_conflict_types = ["Battles","Explosions/Remote violence","Violence against civilians","Riots"]
+        conflict_data = conflict_data[conflict_data["event_type"].isin(violent_conflict_types)].copy()
+        self.conflict_data = conflict_data  # keep as you had
+
+        # counts per point-month
+        conflict_data["conflict_total_num"] = conflict_data.groupby(
+            ["latitude","longitude","year","month"]
+        )["event_id_cnty"].transform("count")
+        conflict_data["conflict_fatalities_num"] = conflict_data.groupby(
+            ["latitude","longitude","year","month"]
+        )["fatalities"].transform("sum")
+        conflict_data = conflict_data.drop_duplicates(subset=["latitude","longitude","year","month"]).copy()
+
+        # geometry (no SettingWithCopy)
+        conflict_gdf = gpd.GeoDataFrame(
+            conflict_data,
+            geometry=gpd.points_from_xy(conflict_data["longitude"], conflict_data["latitude"]),
+            crs="EPSG:4326"
+        )
+
+        # ------------ 7) Projection to meters (shared CRS) ------------
+        _target = (self.polygons.estimate_utm_crs()
+                if hasattr(self.polygons, "estimate_utm_crs") else "EPSG:3857")
+        wards_proj   = self.polygons.to_crs(_target)
+        events_proj  = conflict_gdf.to_crs(_target)
+
+        # quick sanity
+        c = wards_proj.geometry.iloc[0].centroid
+        d = events_proj.geometry.distance(c)
+        print("events within 500 km:", int((d <= 500000).sum()),
+            "| within 100 km:", int((d <= 100000).sum()))
+
+        
+        distance_cutoffs = [500000, 100000]  # meters
+
+        for distance_cutoff in distance_cutoffs:
+            results = []
+
+            for _, ward in wards_proj.iterrows():
+                centroid = ward.geometry.centroid
+
+                # distances to THIS ward centroid (vectorized)
+                distances = events_proj.geometry.distance(centroid)
+
+                # pick events within cutoff
+                mask = distances <= distance_cutoff
+                if not mask.any():
+                    monthly_totals = date_df.copy()
+                    monthly_totals[["monthly_conflicts_dis_w","monthly_fatalities_dis_w"]] = 0.0
+                else:
+                    sub = events_proj.loc[mask, ["year","month","conflict_total_num","conflict_fatalities_num"]].copy()
+                    sub["year"]  = sub["year"].astype(int)
+                    sub["month"] = sub["month"].astype(int)
+                    sub["conflict_total_num"]      = pd.to_numeric(sub["conflict_total_num"], errors="coerce").fillna(0.0)
+                    sub["conflict_fatalities_num"] = pd.to_numeric(sub["conflict_fatalities_num"], errors="coerce").fillna(0.0)
+
+                    # safe log weight (aligned to mask)
+                    denom = np.log(distances.loc[mask] + 1.0)
+                    denom = denom.where(denom > 0, 1e-6).to_numpy()
+
+                    sub["conflict_total_num_w"]      = sub["conflict_total_num"].to_numpy()      / denom
+                    sub["conflict_fatalities_num_w"] = sub["conflict_fatalities_num"].to_numpy() / denom
+
+                    # monthly sums from events
+                    monthly_totals = (sub.groupby(["year","month"])
+                                        .agg(monthly_conflicts_dis_w=("conflict_total_num_w","sum"),
+                                            monthly_fatalities_dis_w=("conflict_fatalities_num_w","sum"))
+                                        .reset_index())
+
+                    
+                    monthly_totals["year"]  = monthly_totals["year"].astype(int)
+                    monthly_totals["month"] = monthly_totals["month"].astype(int)
+                    monthly_totals = date_df.merge(monthly_totals, on=["year","month"], how="left")
+                    monthly_totals[["monthly_conflicts_dis_w","monthly_fatalities_dis_w"]] = (
+                        monthly_totals[["monthly_conflicts_dis_w","monthly_fatalities_dis_w"]].fillna(0.0)
                     )
-                    monthly_totals["fatalities_previous_12m"] = (
-                        monthly_totals["monthly_fatalities_dis_w"].rolling(12, min_periods=1).sum()
-                    )
-    
-                    # clip back to analysis window
-                    mask_window = (monthly_totals["date"] >= start_date_evi.to_period("M").to_timestamp()) & \
-                                (monthly_totals["date"] <= end_date_evi.to_period("M").to_timestamp())
-                    monthly_totals = monthly_totals.loc[mask_window].reset_index(drop=True)
-    
-                    monthly_totals[self.polygon_id_col] = ward[self.polygon_id_col]
-                    results.append(monthly_totals)
-    
-                # concat wards & keep columns
-                final_df = pd.concat(results, ignore_index=True)
-                final_df = final_df[[self.polygon_id_col, "year", "month",
-                                    "monthly_conflicts_dis_w", "monthly_fatalities_dis_w",
-                                    "conflict_previous_12m", "fatalities_previous_12m"]]
-    
-                # save
-                distance_cutoff_km = int(distance_cutoff / 1000)
-                dr = pd.date_range(start=self.start_date_evi, end=self.end_date_evi, freq="MS")
-                start_label = dr.min().strftime("%b_%Y")
-                end_label   = dr.max().strftime("%b_%Y")
-                date_label  = start_label if start_label == end_label else f"{start_label}_{end_label}"
-                final_df.to_pickle(os.path.join(
-                    OUTPUT,
-                    f"ACLED_conflict_12m_running_sum_by_polygon_{distance_cutoff_km}kmcutoff_{date_label}.pkl"
-                ))
+
+                # rolling over the full padded window
+                monthly_totals = monthly_totals.sort_values("date").reset_index(drop=True)
+                monthly_totals["conflict_previous_12m"] = (
+                    monthly_totals["monthly_conflicts_dis_w"].rolling(12, min_periods=1).sum()
+                )
+                monthly_totals["fatalities_previous_12m"] = (
+                    monthly_totals["monthly_fatalities_dis_w"].rolling(12, min_periods=1).sum()
+                )
+
+                # clip back to analysis window
+                mask_window = (monthly_totals["date"] >= start_date_evi.to_period("M").to_timestamp()) & \
+                            (monthly_totals["date"] <= end_date_evi.to_period("M").to_timestamp())
+                monthly_totals = monthly_totals.loc[mask_window].reset_index(drop=True)
+
+                monthly_totals[self.polygon_id_col] = ward[self.polygon_id_col]
+                results.append(monthly_totals)
+
+            # concat wards & keep columns
+            final_df = pd.concat(results, ignore_index=True)
+            final_df = final_df[[self.polygon_id_col, "year", "month",
+                                "monthly_conflicts_dis_w", "monthly_fatalities_dis_w",
+                                "conflict_previous_12m", "fatalities_previous_12m"]]
+
+            # save
+            distance_cutoff_km = int(distance_cutoff / 1000)
+            dr = pd.date_range(start=self.start_date_evi, end=self.end_date_evi, freq="MS")
+            start_label = dr.min().strftime("%b_%Y")
+            end_label   = dr.max().strftime("%b_%Y")
+            date_label  = start_label if start_label == end_label else f"{start_label}_{end_label}"
+            final_df.to_pickle(os.path.join(
+                OUTPUT,
+                f"ACLED_conflict_12m_running_sum_by_polygon_{distance_cutoff_km}kmcutoff_{date_label}.pkl"
+            ))
 #============================================================
 #--------------- POPULATION DENSITY --------------------#
 #============================================================
